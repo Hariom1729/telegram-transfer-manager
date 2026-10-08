@@ -320,3 +320,98 @@ async def test_text_handler_clean_range_input_prompts_confirmation():
     # Verify pending delete IDs set
     pending = session_store.get_data(12345).get("pending_delete_ids")
     assert pending == list(range(10, 21))
+
+
+# =============================================================================
+# 4. Topic Cleaning and Deletion Tests
+# =============================================================================
+
+@pytest.mark.asyncio
+async def test_scan_duplicates_filtered_by_topic():
+    """Verify scanning duplicates with topic_id filters out messages from other topics/subgroups."""
+    attr1 = SimpleNamespace(file_name="file.pdf")
+    doc1 = SimpleNamespace(size=5000, attributes=[attr1])
+
+    # Messages across two different topics: Topic 100 and Topic 200
+    messages = [
+        # Original in Topic 100
+        SimpleNamespace(id=1, media=True, document=doc1, photo=None, message="Doc", reply_to=SimpleNamespace(reply_to_msg_id=100, reply_to_top_id=100)),
+        # Duplicate in Topic 100
+        SimpleNamespace(id=2, media=True, document=doc1, photo=None, message="Doc Copy", reply_to=SimpleNamespace(reply_to_msg_id=100, reply_to_top_id=100)),
+        # Message in Topic 200 (same file, but in a different topic)
+        SimpleNamespace(id=3, media=True, document=doc1, photo=None, message="Topic 200 Doc", reply_to=SimpleNamespace(reply_to_msg_id=200, reply_to_top_id=200)),
+    ]
+
+    async def mock_iter_messages(*args, **kwargs):
+        for m in messages:
+            yield m
+
+    mock_client = MagicMock()
+    mock_client.iter_messages = mock_iter_messages
+
+    result = await ChatCleanerService.scan_duplicates(
+        client=mock_client,
+        chat_id=-100123456789,
+        chat_title="Forum Group",
+        limit=100,
+        topic_id=100,
+    )
+
+    # Only messages 1 and 2 from Topic 100 should be considered, message 3 is filtered out!
+    assert result.total_scanned == 2
+    assert result.duplicate_ids == [2]
+    assert result.duplicate_media_count == 1
+
+
+@pytest.mark.asyncio
+async def test_delete_topic_executes_mtproto_request():
+    """Verify delete_topic invokes DeleteTopicHistoryRequest and cleans mapping."""
+    mock_client = AsyncMock()
+    mock_client.get_entity = AsyncMock(return_value=MagicMock())
+
+    success = await ChatCleanerService.delete_topic(mock_client, -100123, 77)
+    assert success is True
+    # Verify RPC called
+    assert mock_client.call_count == 1
+
+
+
+@pytest.mark.asyncio
+async def test_handle_clean_callback_topic_management_flow():
+    """Verify full interactive topic cleaning and deletion callback queries."""
+    from app.telegram.topics import DiscoveredTopic
+
+    mock_topics = [
+        DiscoveredTopic(id=50, title="Videos Topic"),
+        DiscoveredTopic(id=60, title="General Chat"),
+    ]
+    session_store.update_data(12345, account_id=1, clean_chat_title="My Forum", clean_available_topics=mock_topics)
+
+    mock_client = MagicMock()
+    mock_client.is_connected = MagicMock(return_value=True)
+
+    # 1. Test clean:topics_list:-100123
+    update1, _ = make_mock_callback_update(user_id=12345, data="clean:topics_list:-100123")
+    with patch("app.transfer.cleaner.user_client_manager.get_active_client", AsyncMock(return_value=mock_client)):
+        await handle_clean_callback(update1, 12345, "clean:topics_list:-100123")
+        text1 = update1.callback_query.edit_message_text.call_args.kwargs["text"]
+        assert "Topics in My Forum" in text1
+        assert "Found 2 topic(s)" in text1
+
+    # 2. Test clean:prompt_del_topic:-100123:50
+    update2, _ = make_mock_callback_update(user_id=12345, data="clean:prompt_del_topic:-100123:50")
+    with patch("app.transfer.cleaner.user_client_manager.get_active_client", AsyncMock(return_value=mock_client)):
+        await handle_clean_callback(update2, 12345, "clean:prompt_del_topic:-100123:50")
+        text2 = update2.callback_query.edit_message_text.call_args.kwargs["text"]
+        assert "Confirm Delete Topic" in text2
+        assert "Videos Topic" in text2
+
+    # 3. Test clean:exec_del_topic:-100123:50
+    update3, _ = make_mock_callback_update(user_id=12345, data="clean:exec_del_topic:-100123:50")
+    with patch("app.transfer.cleaner.user_client_manager.get_active_client", AsyncMock(return_value=mock_client)), \
+         patch("app.transfer.cleaner.chat_cleaner_service.delete_topic", AsyncMock(return_value=True)):
+        await handle_clean_callback(update3, 12345, "clean:exec_del_topic:-100123:50")
+        text3 = update3.callback_query.edit_message_text.call_args.kwargs["text"]
+        assert "Topic Deleted Successfully" in text3
+        assert "Videos Topic" in text3
+

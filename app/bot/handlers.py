@@ -462,6 +462,8 @@ async def text_message_handler(
 
             chat_id = udata.get("clean_chat_id")
             chat_title = udata.get("clean_chat_title") or str(chat_id)
+            topic_id = udata.get("clean_topic_id")
+            topic_title = udata.get("clean_topic_title")
 
             message_ids = list(range(start_id, end_id + 1))
             session_store.update_data(
@@ -469,9 +471,10 @@ async def text_message_handler(
                 pending_delete_ids=message_ids,
             )
             count = len(message_ids)
+            topic_line = f"\n• *Topic:* 🧵 {topic_title}" if topic_id else ""
             confirm_text = (
                 f"⚠️ *Confirm Range Purge*\n\n"
-                f"• *Chat:* {chat_title}\n"
+                f"• *Chat:* {chat_title}{topic_line}\n"
                 f"• *Range:* Messages {start_id} to {end_id} ({count} messages)\n\n"
                 f"Are you sure you want to permanently delete these messages?"
             )
@@ -487,6 +490,7 @@ async def text_message_handler(
                 ]
             )
             await message.reply_text(confirm_text, reply_markup=kb, parse_mode="Markdown")
+
             return
         else:
             await message.reply_text(

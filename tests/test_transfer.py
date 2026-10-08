@@ -306,4 +306,58 @@ def test_progress_tracker_completed_skipped_note():
     assert "To download new messages:" in msg
 
 
+@pytest.mark.asyncio
+async def test_create_job_with_source_topic():
+    """Verify creating a job with source forum topic records source_thread_id and source_topic_name."""
+    from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+    from app.database import Base
+    import app.transfer.manager as tm_module
+
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:", echo=False)
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+
+    session_factory = async_sessionmaker(
+        bind=engine, class_=AsyncSession, expire_on_commit=False
+    )
+
+    from contextlib import asynccontextmanager
+    @asynccontextmanager
+    async def mock_get_session():
+        async with session_factory() as session:
+            try:
+                yield session
+                await session.commit()
+            except Exception:
+                await session.rollback()
+                raise
+
+    original_get_session = tm_module.get_session
+    tm_module.get_session = mock_get_session
+
+    try:
+        manager = tm_module.TransferManager()
+        job = await manager.create_job(
+            owner_id=123,
+            telegram_account_id=1,
+            source_chat_id=-100100,
+            source_chat_title="My Forum Source",
+            source_thread_id=55,
+            source_topic_name="Physics",
+            destination_chat_id=-100200,
+            destination_chat_title="Dest Group",
+            destination_thread_id=77,
+            topic_name="General",
+        )
+
+        assert job.source_thread_id == 55
+        assert job.source_topic_name == "Physics"
+        assert job.destination_thread_id == 77
+        assert job.topic_name == "General"
+    finally:
+        tm_module.get_session = original_get_session
+        await engine.dispose()
+
+
+
 

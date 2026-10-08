@@ -742,21 +742,6 @@ class ChatPicker:
             await ChatDiscovery.record_chat_selection(account_id, picked)
 
         if target in ("source", "src"):
-            if udata.get("is_local_download"):
-                session_store.update_data(
-                    user_id,
-                    source_chat_id=picked.id,
-                    source_chat_title=picked.title,
-                    destination_chat_id=0,
-                    destination_chat_title="💾 Downloads Folder",
-                    destination_thread_id=None,
-                    topic_name=None,
-                )
-                from app.bot.callbacks import _show_content_filter
-
-                await _show_content_filter(query, user_id)
-                return
-
             if udata.get("is_cleaning_mode"):
                 session_store.update_data(
                     user_id,
@@ -768,10 +753,82 @@ class ChatPicker:
                 await show_clean_menu(query, user_id, picked.id, picked.title)
                 return
 
+            client = await user_client_manager.get_client_for_account(account_id)
+
+            # Check if source chat is a forum supergroup with topics
+            if picked.is_forum and client:
+                try:
+                    topics = await TopicManager.get_topics(client, picked.id)
+                    if topics:
+                        session_store.update_data(
+                            user_id,
+                            source_chat_id=picked.id,
+                            source_chat_title=picked.title,
+                            available_source_topics=topics,
+                        )
+                        text = (
+                            f"✅ *Source Group Selected*\n\n"
+                            f"{picked.display_icon} *{picked.title}*\n\n"
+                            "🧵 *This group has Topics / Subgroups enabled.*\n"
+                            "Select which topic to transfer from, or transfer the entire group:"
+                        )
+                        buttons = [
+                            [
+                                InlineKeyboardButton(
+                                    f"🧵 {t.title}",
+                                    callback_data=f"topic:src:{t.id}",
+                                )
+                            ]
+                            for t in topics[:20]
+                        ]
+                        buttons.append(
+                            [
+                                InlineKeyboardButton(
+                                    "🌐 Entire Group (All Topics)",
+                                    callback_data="topic:src:all",
+                                )
+                            ]
+                        )
+                        buttons.append(
+                            [
+                                InlineKeyboardButton(
+                                    "⬅️ Change Source", callback_data="cp:src:menu"
+                                ),
+                                InlineKeyboardButton("❌ Cancel", callback_data="nav:cancel"),
+                            ]
+                        )
+                        await query.edit_message_text(
+                            text=text,
+                            reply_markup=InlineKeyboardMarkup(buttons),
+                            parse_mode="Markdown",
+                        )
+                        return
+                except Exception as e:
+                    logger.error("Failed to retrieve source forum topics: %s", e)
+
+            if udata.get("is_local_download"):
+                session_store.update_data(
+                    user_id,
+                    source_chat_id=picked.id,
+                    source_chat_title=picked.title,
+                    source_thread_id=None,
+                    source_topic_name=None,
+                    destination_chat_id=0,
+                    destination_chat_title="💾 Downloads Folder",
+                    destination_thread_id=None,
+                    topic_name=None,
+                )
+                from app.bot.callbacks import _show_content_filter
+
+                await _show_content_filter(query, user_id)
+                return
+
             session_store.update_data(
                 user_id,
                 source_chat_id=picked.id,
                 source_chat_title=picked.title,
+                source_thread_id=None,
+                source_topic_name=None,
             )
             text = (
                 f"✅ *Source Selected*\n\n"
@@ -798,6 +855,7 @@ class ChatPicker:
             await query.edit_message_text(
                 text=text, reply_markup=kb, parse_mode="Markdown"
             )
+
 
         elif target in ("dest", "dst"):
             if picked.id == 0:

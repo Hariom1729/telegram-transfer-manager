@@ -69,8 +69,17 @@ async def init_db() -> None:
                         await conn.exec_driver_sql("ALTER TABLE chats ADD COLUMN is_megagroup BOOLEAN DEFAULT 0")
                     if "last_used_at" not in existing_cols:
                         await conn.exec_driver_sql("ALTER TABLE chats ADD COLUMN last_used_at DATETIME")
+
+                res_jobs = await conn.exec_driver_sql("PRAGMA table_info(transfer_jobs)")
+                existing_job_cols = [row[1] for row in res_jobs.fetchall()]
+                if existing_job_cols:
+                    if "source_thread_id" not in existing_job_cols:
+                        await conn.exec_driver_sql("ALTER TABLE transfer_jobs ADD COLUMN source_thread_id INTEGER")
+                    if "source_topic_name" not in existing_job_cols:
+                        await conn.exec_driver_sql("ALTER TABLE transfer_jobs ADD COLUMN source_topic_name VARCHAR(255)")
             except Exception:
                 pass
+
 
 
 async def close_db() -> None:

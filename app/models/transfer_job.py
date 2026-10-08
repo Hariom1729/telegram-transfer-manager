@@ -32,6 +32,11 @@ class TransferJob(Base):
 
     source_chat_id: Mapped[int] = mapped_column(BigInteger, index=True, nullable=False)
     source_chat_title: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    source_thread_id: Mapped[int | None] = mapped_column(
+        Integer, nullable=True
+    )  # Source Forum topic thread ID
+    source_topic_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
+
 
     destination_chat_id: Mapped[int] = mapped_column(
         BigInteger, index=True, nullable=False

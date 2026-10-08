@@ -538,7 +538,64 @@ async def _handle_topic_action(query, user_id: int, data: str) -> None:
     dest_title = udata.get("destination_chat_title", "Destination")
     client = await user_client_manager.get_client_for_account(account_id)
 
+    if data.startswith("topic:src:"):
+        source_title = udata.get("source_chat_title", "Source")
+        if data == "topic:src:all":
+            session_store.update_data(
+                user_id,
+                source_thread_id=None,
+                source_topic_name="All Topics",
+            )
+            topic_display = "🌐 Entire Group (All Topics)"
+        else:
+            topic_id = int(data.split(":")[-1])
+            topics = udata.get("available_source_topics", [])
+            topic_name = next(
+                (t.title for t in topics if t.id == topic_id), f"Topic #{topic_id}"
+            )
+            session_store.update_data(
+                user_id,
+                source_thread_id=topic_id,
+                source_topic_name=topic_name,
+            )
+            topic_display = f"🧵 {topic_name}"
+
+        if udata.get("is_local_download"):
+            session_store.update_data(
+                user_id,
+                destination_chat_id=0,
+                destination_chat_title="💾 Downloads Folder",
+                destination_thread_id=None,
+                topic_name=None,
+            )
+            await _show_content_filter(query, user_id)
+            return
+
+        text = (
+            f"✅ *Source Selected*\n\n"
+            f"📢 *{source_title}*\n"
+            f"{topic_display}\n\n"
+            "Next step: Select the transfer destination."
+        )
+        kb = InlineKeyboardMarkup(
+            [
+                [
+                    InlineKeyboardButton(
+                        "➡️ Select Destination",
+                        callback_data="cp:src:to_dest",
+                    )
+                ],
+                [
+                    InlineKeyboardButton("⬅️ Change Source", callback_data="cp:src:menu"),
+                    InlineKeyboardButton("❌ Cancel", callback_data="nav:cancel"),
+                ],
+            ]
+        )
+        await query.edit_message_text(text=text, reply_markup=kb, parse_mode="Markdown")
+        return
+
     if data.startswith("topic:pick:"):
+
         topic_id = int(data.split(":")[-1])
         topics = udata.get("available_topics", [])
         topic_name = next(
@@ -774,6 +831,9 @@ async def _show_transfer_preview(query, user_id: int) -> None:
     topic_name = udata.get("topic_name")
     topic_line = f"\nTOPIC\n🧵 {topic_name}\n" if (topic_name and not is_local) else ""
 
+    src_topic_name = udata.get("source_topic_name")
+    src_topic_line = f"🧵 Topic: {src_topic_name}\n" if (src_topic_name and src_topic_name != "All Topics") else ""
+
     c_types = udata.get("content_types", ["all"])
     content_str = "📦 Everything" if "all" in c_types else ", ".join(c_types)
 
@@ -794,7 +854,7 @@ async def _show_transfer_preview(query, user_id: int) -> None:
 
     preview_text = (
         f"{header}\n\n"
-        f"SOURCE\n📢 {source_title}\n\n"
+        f"SOURCE\n📢 {source_title}\n{src_topic_line}\n"
         f"DESTINATION\n{dest_icon} {dest_title}\n"
         f"{topic_line}\n"
         f"CONTENT\n{content_str}\n\n"
@@ -816,6 +876,8 @@ async def _handle_preview_action(query, user_id: int, data: str) -> None:
         account_id = udata.get("account_id")
         source_id = udata.get("source_chat_id")
         source_title = udata.get("source_chat_title")
+        source_thread_id = udata.get("source_thread_id")
+        source_topic_name = udata.get("source_topic_name")
         dest_id = udata.get("destination_chat_id", 0)
         dest_title = udata.get("destination_chat_title")
         dest_thread_id = udata.get("destination_thread_id")
@@ -832,6 +894,8 @@ async def _handle_preview_action(query, user_id: int, data: str) -> None:
             telegram_account_id=account_id,
             source_chat_id=source_id,
             source_chat_title=source_title,
+            source_thread_id=source_thread_id,
+            source_topic_name=source_topic_name,
             destination_chat_id=dest_id,
             destination_chat_title=dest_title,
             destination_thread_id=dest_thread_id,
@@ -842,6 +906,7 @@ async def _handle_preview_action(query, user_id: int, data: str) -> None:
             end_message_id=end_id,
             total_messages=r_limit if r_limit else 0,
         )
+
 
         chat_id = query.message.chat_id
         message_id = query.message.message_id

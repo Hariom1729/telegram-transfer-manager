@@ -41,6 +41,8 @@ class TransferManager:
         destination_chat_title: str,
         destination_thread_id: Optional[int] = None,
         topic_name: Optional[str] = None,
+        source_thread_id: Optional[int] = None,
+        source_topic_name: Optional[str] = None,
         content_types: str = "all",
         duplicate_mode: str = "skip",
         start_message_id: Optional[int] = None,
@@ -56,6 +58,8 @@ class TransferManager:
                 telegram_account_id=telegram_account_id,
                 source_chat_id=source_chat_id,
                 source_chat_title=source_chat_title,
+                source_thread_id=source_thread_id,
+                source_topic_name=source_topic_name,
                 destination_chat_id=destination_chat_id,
                 destination_chat_title=destination_chat_title,
                 destination_thread_id=destination_thread_id,
@@ -72,13 +76,15 @@ class TransferManager:
             job_id = job.id
 
         logger.info(
-            "Created transfer job=%s source=%s dest=%s thread=%s",
+            "Created transfer job=%s source=%s dest=%s src_thread=%s dst_thread=%s",
             job_id,
             source_chat_id,
             destination_chat_id,
+            source_thread_id,
             destination_thread_id,
         )
         return job
+
 
     async def start_job(self, job_id: int) -> bool:
         """Enqueue a newly created or ready job for execution."""

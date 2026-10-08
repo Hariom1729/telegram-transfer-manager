@@ -216,16 +216,47 @@ class TransferWorker:
             "entity": source_entity,
             "reverse": True,
         }
+        if job.source_thread_id:
+            iter_kwargs["reply_to"] = job.source_thread_id
+
         if start_msg_id and start_msg_id > 0:
             iter_kwargs["min_id"] = max(0, start_msg_id - 1)
         if end_msg_id and end_msg_id > 0:
             iter_kwargs["max_id"] = end_msg_id + 1
         elif job.total_messages and job.total_messages > 0 and not start_msg_id:
             iter_kwargs["limit"] = job.total_messages
+        else:
+            # Snapshot latest message ID at job start to prevent infinite loops when transferring all messages
+            try:
+                latest_msgs = await client.get_messages(
+                    source_entity,
+                    limit=1,
+                    reply_to=job.source_thread_id if job.source_thread_id else None,
+                )
+                if latest_msgs and latest_msgs[0]:
+                    iter_kwargs["max_id"] = latest_msgs[0].id + 1
+            except Exception as se:
+                logger.debug("Could not snapshot max message id: %s", se)
 
         try:
             async for msg in client.iter_messages(**iter_kwargs):
+                if not msg or not msg.id:
+                    continue
+
+                # Thread / Topic verification:
+                # If a source topic was specified, ensure the message belongs to this topic!
+                if job.source_thread_id:
+                    msg_topic_id = None
+                    if getattr(msg, "reply_to", None):
+                        msg_topic_id = (
+                            getattr(msg.reply_to, "reply_to_top_id", None)
+                            or getattr(msg.reply_to, "reply_to_msg_id", None)
+                        )
+                    if msg.id != job.source_thread_id and msg_topic_id != job.source_thread_id:
+                        continue
+
                 # 1. Check for Cancel
+
                 if self._cancel_flags.get(job_id):
                     await self._cancel_job(job_id)
                     await tracker.update(force=True, status_label="CANCELLED")
