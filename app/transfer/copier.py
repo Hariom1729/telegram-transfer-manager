@@ -1,9 +1,11 @@
+from __future__ import annotations
+
 from dataclasses import dataclass
 import logging
 import os
 from pathlib import Path
 import time
-from typing import Any, Callable, List, Optional
+from typing import Any, Callable, Coroutine, Dict, List, Optional, Tuple, Union
 import uuid
 
 from telethon import TelegramClient, utils
