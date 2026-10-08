@@ -1,8 +1,8 @@
-"""Reusable Telegram-Native Chat/Channel Picker UI for Sources and Destinations."""
+from __future__ import annotations
 
 import inspect
 import logging
-from typing import List, Optional
+from typing import Any, Dict, List, Optional, Tuple, Union
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telethon import TelegramClient
 from telethon.errors import FloodWaitError

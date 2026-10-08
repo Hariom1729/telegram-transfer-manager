@@ -1,5 +1,6 @@
-"""Inline Keyboard Builders for Telegram Transfer Manager UI."""
+from __future__ import annotations
 
+from typing import Any, Dict, List, Optional, Tuple, Union
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, WebAppInfo
 from app.config import settings
 from app.models.telegram_account import TelegramAccount

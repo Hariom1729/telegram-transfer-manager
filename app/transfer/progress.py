@@ -1,8 +1,8 @@
-"""Progress Tracking and UI Status Formatter."""
+from __future__ import annotations
 
 import asyncio
 import time
-from typing import Callable, Coroutine, Optional
+from typing import Any, Callable, Coroutine, Dict, List, Optional
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 from app.config import settings
 from app.utils.formatting import format_progress_bar
