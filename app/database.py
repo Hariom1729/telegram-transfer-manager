@@ -81,6 +81,12 @@ async def init_db() -> None:
                         await conn.exec_driver_sql("ALTER TABLE transfer_jobs ADD COLUMN failed_message_ids TEXT")
                     if "specific_message_ids" not in existing_job_cols:
                         await conn.exec_driver_sql("ALTER TABLE transfer_jobs ADD COLUMN specific_message_ids TEXT")
+
+                res_accs = await conn.exec_driver_sql("PRAGMA table_info(telegram_accounts)")
+                existing_acc_cols = [row[1] for row in res_accs.fetchall()]
+                if existing_acc_cols:
+                    if "session_string" not in existing_acc_cols:
+                        await conn.exec_driver_sql("ALTER TABLE telegram_accounts ADD COLUMN session_string TEXT")
             except Exception:
                 pass
 

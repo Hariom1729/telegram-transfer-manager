@@ -8,6 +8,7 @@ import time
 from typing import Any, Dict, List, Optional, Tuple
 from sqlalchemy import select
 from telethon import TelegramClient
+from telethon.sessions import StringSession
 from telethon.errors import (
     AuthKeyUnregisteredError,
     FloodWaitError,
@@ -132,45 +133,62 @@ class UserClientManager:
             if not settings.API_ID or not settings.API_HASH:
                 raise ValueError("API_ID and API_HASH must be configured in environment.")
 
-            session_file = self._get_session_path(account.session_name)
-            session_file_path = Path(
-                session_file if session_file.endswith(".session") else f"{session_file}.session"
-            )
+            if account.session_string:
+                client = TelegramClient(
+                    session=StringSession(account.session_string),
+                    api_id=settings.API_ID,
+                    api_hash=settings.API_HASH,
+                )
+            else:
+                session_file = self._get_session_path(account.session_name)
+                session_file_path = Path(
+                    session_file if session_file.endswith(".session") else f"{session_file}.session"
+                )
 
-            # Check if session directory is writable
-            sess_dir = Path(settings.SESSION_DIRECTORY)
-            if not os.access(sess_dir, os.W_OK):
-                logger.error("Session directory %s is not writable!", sess_dir)
-                raise SessionStorageError(f"Session directory {sess_dir} is not writable.")
+                # Check if session directory is writable
+                sess_dir = Path(settings.SESSION_DIRECTORY)
+                if not os.access(sess_dir, os.W_OK):
+                    logger.error("Session directory %s is not writable!", sess_dir)
+                    raise SessionStorageError(f"Session directory {sess_dir} is not writable.")
 
-            # Automatic migration for legacy session files if account_X.session is absent
-            if not session_file_path.exists() and account.phone_number:
-                clean_phone = account.phone_number.lstrip("+").strip()
-                legacy_file = sess_dir / f"user_{clean_phone}.session"
-                if legacy_file.exists():
-                    try:
-                        shutil.copy2(legacy_file, session_file_path)
-                        logger.info("Migrated legacy session %s -> %s", legacy_file, session_file_path)
-                    except Exception as ex:
-                        logger.warning("Failed to copy legacy session: %s", ex)
+                # Automatic migration for legacy session files if account_X.session is absent
+                if not session_file_path.exists() and account.phone_number:
+                    clean_phone = account.phone_number.lstrip("+").strip()
+                    legacy_file = sess_dir / f"user_{clean_phone}.session"
+                    if legacy_file.exists():
+                        try:
+                            shutil.copy2(legacy_file, session_file_path)
+                            logger.info("Migrated legacy session %s -> %s", legacy_file, session_file_path)
+                        except Exception as ex:
+                            logger.warning("Failed to copy legacy session: %s", ex)
 
-            # Ensure session file has write permissions if it exists
-            if session_file_path.exists():
-                if not os.access(session_file_path, os.W_OK):
-                    try:
-                        os.chmod(session_file_path, 0o644)
-                    except Exception as ex:
-                        logger.warning("Failed to set write permissions on %s: %s", session_file_path, ex)
+                # Ensure session file has write permissions if it exists
+                if session_file_path.exists():
+                    if not os.access(session_file_path, os.W_OK):
+                        try:
+                            os.chmod(session_file_path, 0o644)
+                        except Exception as ex:
+                            logger.warning("Failed to set write permissions on %s: %s", session_file_path, ex)
 
-            client = TelegramClient(
-                session=session_file,
-                api_id=settings.API_ID,
-                api_hash=settings.API_HASH,
-            )
+                client = TelegramClient(
+                    session=session_file,
+                    api_id=settings.API_ID,
+                    api_hash=settings.API_HASH,
+                )
 
             try:
                 await client.connect()
                 is_authorized = await client.is_user_authorized()
+                if is_authorized and not account.session_string:
+                    try:
+                        s_str = StringSession.save(client.session)
+                        if s_str:
+                            async with get_session() as s_sess:
+                                acc_update = await s_sess.get(TelegramAccount, account_id)
+                                if acc_update:
+                                    acc_update.session_string = s_str
+                    except Exception as ex:
+                        logger.debug("Could not auto-populate session_string from client.session: %s", ex)
             except sqlite3.OperationalError as e:
                 logger.error("Session storage OperationalError connecting account %s: %s", account_id, e)
                 try:
@@ -492,6 +510,13 @@ class UserClientManager:
             if not client.is_connected():
                 await client.connect()
 
+            # Export StringSession so credentials persist safely across container restarts
+            sess_str = None
+            try:
+                sess_str = StringSession.save(client.session)
+            except Exception as se:
+                logger.warning("Could not export session string: %s", se)
+
             # Store metadata and mark connected
             async with get_session() as session:
                 res = await session.execute(
@@ -500,6 +525,8 @@ class UserClientManager:
                 acc_rec = res.scalar_one_or_none()
                 if acc_rec:
                     acc_rec.session_name = session_name
+                    if sess_str:
+                        acc_rec.session_string = sess_str
                     acc_rec.account_user_id = getattr(me, "id", None)
                     acc_rec.username = getattr(me, "username", None)
                     acc_rec.first_name = getattr(me, "first_name", None)

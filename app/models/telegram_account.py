@@ -1,7 +1,7 @@
 """Telegram Account database model."""
 
 from datetime import datetime, timezone
-from sqlalchemy import BigInteger, Boolean, DateTime, ForeignKey, Integer, String
+from sqlalchemy import BigInteger, Boolean, DateTime, ForeignKey, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.database import Base
 
@@ -21,6 +21,7 @@ class TelegramAccount(Base):
     session_name: Mapped[str] = mapped_column(
         String(128), unique=True, nullable=False
     )
+    session_string: Mapped[str | None] = mapped_column(Text, nullable=True)
     account_user_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     username: Mapped[str | None] = mapped_column(String(255), nullable=True)
     first_name: Mapped[str | None] = mapped_column(String(255), nullable=True)

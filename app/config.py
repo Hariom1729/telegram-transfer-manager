@@ -38,6 +38,11 @@ class Settings:
     _raw_db_url = os.getenv(
         "DATABASE_URL", "sqlite+aiosqlite:///./data/telegram.db"
     ).strip()
+    if _raw_db_url.startswith("postgres://"):
+        _raw_db_url = _raw_db_url.replace("postgres://", "postgresql+asyncpg://", 1)
+    elif _raw_db_url.startswith("postgresql://") and not _raw_db_url.startswith("postgresql+"):
+        _raw_db_url = _raw_db_url.replace("postgresql://", "postgresql+asyncpg://", 1)
+
     if _raw_db_url.startswith("sqlite+aiosqlite:///./") or _raw_db_url.startswith("sqlite+aiosqlite://./"):
         _rel_db_path = _raw_db_url.split("sqlite+aiosqlite:///")[-1].lstrip("./")
         DATABASE_URL: str = f"sqlite+aiosqlite:///{PROJECT_ROOT / _rel_db_path}"
