@@ -359,5 +359,111 @@ async def test_create_job_with_source_topic():
         await engine.dispose()
 
 
+def test_progress_bar_completed_is_100_percent():
+    """Verify that a completed job always shows 100% progress bar, even if total_messages was 0."""
+    tracker = ProgressTracker(
+        job_id=71,
+        source_title="Source Group",
+        destination_title="Target Group",
+        total_messages=0,  # "All messages" was selected
+    )
+    tracker.processed_messages = 155
+    tracker.successful_messages = 150
+    tracker.skipped_messages = 1
+    tracker.failed_messages = 4
+
+    status_text = tracker.format_status_message(status_label="COMPLETED")
+    assert "100%" in status_text
+    assert "███████████████ 100%" in status_text
+    assert "Processed: 155" in status_text
+    assert "✅ Success: 150" in status_text
+    assert "❌ Failed: 4" in status_text
+
+
+def test_build_job_completion_keyboard():
+    """Verify that completion keyboard includes retransfer button when there are failed messages."""
+    from app.bot.keyboards import build_job_completion_keyboard
+
+    # No failed messages
+    kb_clean = build_job_completion_keyboard(job_id=1, failed_count=0)
+    flat_clean = [btn.callback_data for row in kb_clean.inline_keyboard for btn in row]
+    assert not any("job_retry_failed" in cb for cb in flat_clean)
+
+    # 4 failed messages
+    kb_failed = build_job_completion_keyboard(job_id=1, failed_count=4)
+    flat_failed = [btn.callback_data for row in kb_failed.inline_keyboard for btn in row]
+    assert any("job_retry_failed:1" in cb for cb in flat_failed)
+    # Check button text
+    btn_text = [btn.text for row in kb_failed.inline_keyboard for btn in row if "job_retry_failed:1" in btn.callback_data][0]
+    assert "Retransfer 4 Failed Msg" in btn_text
+
+
+@pytest.mark.asyncio
+async def test_retry_failed_messages_creates_targeted_job():
+    """Verify retry_failed_messages creates a new TransferJob targeting only the failed message IDs."""
+    from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+    from app.database import Base
+    import app.transfer.manager as tm_module
+    from app.models.transfer_job import TransferJob, JobStatus
+
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:", echo=False)
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+
+    session_factory = async_sessionmaker(
+        bind=engine, class_=AsyncSession, expire_on_commit=False
+    )
+
+    from contextlib import asynccontextmanager
+    @asynccontextmanager
+    async def mock_get_session():
+        async with session_factory() as session:
+            try:
+                yield session
+                await session.commit()
+            except Exception:
+                await session.rollback()
+                raise
+
+    original_get_session = tm_module.get_session
+    tm_module.get_session = mock_get_session
+
+    try:
+        manager = tm_module.TransferManager()
+        # Create an original job with failed messages
+        orig_job = await manager.create_job(
+            owner_id=101,
+            telegram_account_id=1,
+            source_chat_id=-100111,
+            source_chat_title="Orig Source",
+            destination_chat_id=-100222,
+            destination_chat_title="Orig Dest",
+            total_messages=155,
+        )
+
+        async with mock_get_session() as session:
+            db_j = await session.get(TransferJob, orig_job.id)
+            db_j.failed_messages = 4
+            db_j.failed_message_ids = "12,15,48,99"
+            db_j.status = JobStatus.COMPLETED.value
+            await session.commit()
+
+        # Call retry_failed_messages
+        retry_job = await manager.retry_failed_messages(orig_job.id)
+        assert retry_job is not None
+        assert retry_job.id != orig_job.id
+        assert retry_job.owner_id == 101
+        assert retry_job.source_chat_id == -100111
+        assert retry_job.destination_chat_id == -100222
+        assert retry_job.duplicate_mode == "overwrite"
+        assert retry_job.specific_message_ids == "12,15,48,99"
+        assert retry_job.total_messages == 4
+        assert retry_job.status == JobStatus.QUEUED.value
+    finally:
+        tm_module.get_session = original_get_session
+        await engine.dispose()
+
+
+
 
 

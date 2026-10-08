@@ -89,6 +89,17 @@ class TransferWorker:
         tracker.failed_messages = job.failed_messages
         self._active_trackers[job_id] = tracker
 
+        failed_ids: List[int] = []
+        if job.failed_message_ids:
+            try:
+                failed_ids = [
+                    int(x.strip())
+                    for x in job.failed_message_ids.split(",")
+                    if x.strip().isdigit()
+                ]
+            except Exception:
+                failed_ids = []
+
         # 2. Mark VALIDATING state in database and UI
         async with get_session() as session:
             res = await session.execute(
@@ -199,6 +210,28 @@ class TransferWorker:
         tracker.failed_messages = job.failed_messages
         self._active_trackers[job_id] = tracker
 
+        # Query total message count if not set and not specific IDs
+        if (not job.total_messages or job.total_messages == 0) and not job.specific_message_ids:
+            try:
+                count_res = await client.get_messages(
+                    source_entity,
+                    limit=0,
+                    reply_to=job.source_thread_id if job.source_thread_id else None,
+                )
+                if hasattr(count_res, "total") and count_res.total and count_res.total > 0:
+                    tracker.total_messages = count_res.total
+                    job.total_messages = count_res.total
+                    async with get_session() as session:
+                        res = await session.execute(
+                            select(TransferJob).where(TransferJob.id == job_id)
+                        )
+                        db_j = res.scalar_one_or_none()
+                        if db_j:
+                            db_j.total_messages = count_res.total
+                            await session.commit()
+            except Exception as e:
+                logger.debug("Could not query total messages via get_messages(limit=0): %s", e)
+
         # Parse allowed content types
         raw_types = (job.content_types or "all").lower().split(",")
         allowed_types = [t.strip() for t in raw_types if t.strip()]
@@ -211,41 +244,67 @@ class TransferWorker:
         )
         end_msg_id = job.end_message_id
 
-        # Fetch messages in ascending order (chronological)
-        iter_kwargs = {
-            "entity": source_entity,
-            "reverse": True,
-        }
-        if job.source_thread_id:
-            iter_kwargs["reply_to"] = job.source_thread_id
-
-        if start_msg_id and start_msg_id > 0:
-            iter_kwargs["min_id"] = max(0, start_msg_id - 1)
-        if end_msg_id and end_msg_id > 0:
-            iter_kwargs["max_id"] = end_msg_id + 1
-        elif job.total_messages and job.total_messages > 0 and not start_msg_id:
-            iter_kwargs["limit"] = job.total_messages
-        else:
-            # Snapshot latest message ID at job start to prevent infinite loops when transferring all messages
+        specific_ids: List[int] = []
+        if job.specific_message_ids:
             try:
-                latest_msgs = await client.get_messages(
-                    source_entity,
-                    limit=1,
-                    reply_to=job.source_thread_id if job.source_thread_id else None,
-                )
-                if latest_msgs and latest_msgs[0]:
-                    iter_kwargs["max_id"] = latest_msgs[0].id + 1
-            except Exception as se:
-                logger.debug("Could not snapshot max message id: %s", se)
+                specific_ids = [
+                    int(x.strip())
+                    for x in job.specific_message_ids.split(",")
+                    if x.strip().isdigit()
+                ]
+            except Exception:
+                specific_ids = []
+
+        if specific_ids:
+            # Re-transfer ONLY the specific messages requested
+            specific_ids.sort()
+            iter_kwargs = {
+                "entity": source_entity,
+                "ids": specific_ids,
+                "reverse": False,
+            }
+            if not tracker.total_messages or tracker.total_messages <= 0:
+                tracker.total_messages = len(specific_ids)
+        else:
+            # Fetch messages in ascending order (chronological)
+            iter_kwargs = {
+                "entity": source_entity,
+                "reverse": True,
+            }
+            if job.source_thread_id:
+                iter_kwargs["reply_to"] = job.source_thread_id
+
+            if start_msg_id and start_msg_id > 0:
+                iter_kwargs["min_id"] = max(0, start_msg_id - 1)
+            if end_msg_id and end_msg_id > 0:
+                iter_kwargs["max_id"] = end_msg_id + 1
+            elif job.total_messages and job.total_messages > 0 and not start_msg_id:
+                iter_kwargs["limit"] = job.total_messages
+            else:
+                # Snapshot latest message ID at job start to prevent infinite loops when transferring all messages
+                try:
+                    latest_msgs = await client.get_messages(
+                        source_entity,
+                        limit=1,
+                        reply_to=job.source_thread_id if job.source_thread_id else None,
+                    )
+                    if latest_msgs and latest_msgs[0]:
+                        iter_kwargs["max_id"] = latest_msgs[0].id + 1
+                except Exception as se:
+                    logger.debug("Could not snapshot max message id: %s", se)
 
         try:
             async for msg in client.iter_messages(**iter_kwargs):
-                if not msg or not msg.id:
+                if not msg or not getattr(msg, "id", None) or getattr(msg, "empty", False):
+                    if specific_ids:
+                        tracker.processed_messages += 1
+                        tracker.skipped_messages += 1
+                        await tracker.update()
                     continue
 
                 # Thread / Topic verification:
-                # If a source topic was specified, ensure the message belongs to this topic!
-                if job.source_thread_id:
+                # If a source topic was specified and not targeting specific IDs, ensure the message belongs to this topic!
+                if job.source_thread_id and not specific_ids:
                     msg_topic_id = None
                     if getattr(msg, "reply_to", None):
                         msg_topic_id = (
@@ -373,6 +432,8 @@ class TransferWorker:
                         err,
                     )
                     tracker.failed_messages += 1
+                    if msg.id not in failed_ids:
+                        failed_ids.append(msg.id)
                     async with get_session() as session:
                         err_rec = TransferError(
                             transfer_job_id=job.id,
@@ -391,12 +452,13 @@ class TransferWorker:
                     successful=tracker.successful_messages,
                     skipped=tracker.skipped_messages,
                     failed=tracker.failed_messages,
+                    failed_ids=failed_ids,
                 )
                 await tracker.update()
 
             # Finished loop
             duration = time.time() - start_time
-            await self._complete_job(job_id, tracker, duration)
+            await self._complete_job(job_id, tracker, duration, failed_ids=failed_ids)
 
         except Exception as fatal_e:
             logger.error("Job %s encountered fatal loop error: %s", job_id, fatal_e)
@@ -412,6 +474,7 @@ class TransferWorker:
         successful: int,
         skipped: int,
         failed: int,
+        failed_ids: Optional[List[int]] = None,
     ) -> None:
         """Persist intermediate counters to database."""
         async with get_session() as session:
@@ -425,6 +488,8 @@ class TransferWorker:
                 job.successful_messages = successful
                 job.skipped_messages = skipped
                 job.failed_messages = failed
+                if failed_ids is not None:
+                    job.failed_message_ids = ",".join(map(str, failed_ids))
 
     async def _pause_job(self, job_id: int, last_msg_id: int) -> None:
         """Persist paused state."""
@@ -482,7 +547,11 @@ class TransferWorker:
                 pass
 
     async def _complete_job(
-        self, job_id: int, tracker: ProgressTracker, duration: float
+        self,
+        job_id: int,
+        tracker: ProgressTracker,
+        duration: float,
+        failed_ids: Optional[List[int]] = None,
     ) -> None:
         """Persist completed state and trigger completion notice."""
         async with get_session() as session:
@@ -497,6 +566,8 @@ class TransferWorker:
                 job.successful_messages = tracker.successful_messages
                 job.skipped_messages = tracker.skipped_messages
                 job.failed_messages = tracker.failed_messages
+                if failed_ids is not None:
+                    job.failed_message_ids = ",".join(map(str, failed_ids))
 
         logger.info(
             "Transfer completed job=%s success=%s skipped=%s failed=%s duration=%0.1fs",
@@ -507,16 +578,25 @@ class TransferWorker:
             duration,
         )
 
-        done_kb = InlineKeyboardMarkup(
-            [
+        buttons = []
+        if tracker.failed_messages > 0:
+            buttons.append(
                 [
                     InlineKeyboardButton(
-                        "📋 Transfer History", callback_data="nav:history"
-                    ),
-                    InlineKeyboardButton("🏠 Home", callback_data="nav:home"),
+                        f"🔄 Retransfer {tracker.failed_messages} Failed Msg",
+                        callback_data=f"job_retry_failed:{job_id}",
+                    )
                 ]
+            )
+        buttons.append(
+            [
+                InlineKeyboardButton(
+                    "📋 Transfer History", callback_data="nav:history"
+                ),
+                InlineKeyboardButton("🏠 Home", callback_data="nav:home"),
             ]
         )
+        done_kb = InlineKeyboardMarkup(buttons)
         await tracker.update(
             force=True,
             status_label="COMPLETED",

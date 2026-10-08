@@ -306,22 +306,27 @@ def build_preview_keyboard(job_id: Optional[int] = None) -> InlineKeyboardMarkup
     return InlineKeyboardMarkup(keyboard)
 
 
-def build_job_completion_keyboard(job_id: int) -> InlineKeyboardMarkup:
+def build_job_completion_keyboard(
+    job_id: int, failed_count: int = 0
+) -> InlineKeyboardMarkup:
     """Build buttons shown when a transfer is finished."""
-    keyboard = [
+    buttons = []
+    if failed_count > 0:
+        buttons.append(
+            [
+                InlineKeyboardButton(
+                    f"🔄 Retransfer {failed_count} Failed Msg",
+                    callback_data=f"job_retry_failed:{job_id}",
+                )
+            ]
+        )
+    buttons.append(
         [
-            InlineKeyboardButton(
-                "🔄 Retry Failed", callback_data=f"job_retry:{job_id}"
-            ),
-            InlineKeyboardButton(
-                "📊 Details", callback_data=f"job_view:{job_id}"
-            ),
-        ],
-        [
+            InlineKeyboardButton("📊 Details", callback_data=f"job_view:{job_id}"),
             InlineKeyboardButton("🏠 Home", callback_data="nav:home"),
-        ],
-    ]
-    return InlineKeyboardMarkup(keyboard)
+        ]
+    )
+    return InlineKeyboardMarkup(buttons)
 
 
 def build_paused_keyboard(job_id: int) -> InlineKeyboardMarkup:

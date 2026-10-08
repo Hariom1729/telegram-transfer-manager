@@ -80,6 +80,8 @@ class TransferJob(Base):
     completed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
     error_summary: Mapped[str | None] = mapped_column(Text, nullable=True)
+    failed_message_ids: Mapped[str | None] = mapped_column(Text, nullable=True)
+    specific_message_ids: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     # Relationships
     telegram_account = relationship("TelegramAccount", backref="jobs")

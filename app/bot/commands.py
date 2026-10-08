@@ -511,9 +511,27 @@ async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     buttons = []
     for j in active_jobs:
         tracker = transfer_worker.get_tracker(j.id)
-        pct = (j.processed_messages / j.total_messages * 100.0) if j.total_messages > 0 else 0.0
-        p_bar = format_progress_bar(j.processed_messages, j.total_messages, length=10)
         status_label = j.status.upper()
+        if j.status == JobStatus.COMPLETED.value:
+            pct = 100.0
+            p_bar = format_progress_bar(100, 100, length=10)
+        elif j.total_messages > 0:
+            pct = (j.processed_messages / j.total_messages * 100.0)
+            p_bar = format_progress_bar(j.processed_messages, j.total_messages, length=10)
+        elif j.processed_messages > 0:
+            pct = 0.0
+            active_step = (j.processed_messages % 10) + 1
+            p_bar = "█" * active_step + "░" * (10 - active_step)
+        else:
+            pct = 0.0
+            p_bar = format_progress_bar(0, 0, length=10)
+
+        count_label = (
+            f"{j.processed_messages}/{j.total_messages}"
+            if j.total_messages > 0
+            else f"{j.processed_messages}"
+        )
+        pct_label = f"{pct:.0f}%" if (j.total_messages > 0 or j.status == JobStatus.COMPLETED.value) else "In Progress"
 
         text += (
             f"*Transfer #{j.id}*\n"
@@ -521,8 +539,8 @@ async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
             f"Source: {j.source_chat_title or j.source_chat_id}\n"
             f"Destination: {j.destination_chat_title or j.destination_chat_id}\n"
             f"Status: {status_label}\n\n"
-            f"{p_bar} {pct:.0f}%\n\n"
-            f"Processed: {j.processed_messages}/{j.total_messages}\n"
+            f"{p_bar} {pct_label}\n\n"
+            f"Processed: {count_label}\n"
             f"Success: {j.successful_messages}\n"
             f"Failed: {j.failed_messages}\n"
         )
@@ -539,7 +557,15 @@ async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
             text += f"\nSpeed: {spd_mb:.1f} MB/s\nETA: {int(info.eta_seconds)} sec\n"
 
         text += "\n"
-        buttons.append([InlineKeyboardButton(f"Control #{j.id}", callback_data=f"job_view:{j.id}")])
+        row = [InlineKeyboardButton(f"Control #{j.id}", callback_data=f"job_view:{j.id}")]
+        if j.failed_messages > 0:
+            row.append(
+                InlineKeyboardButton(
+                    f"🔄 Retransfer ({j.failed_messages})",
+                    callback_data=f"job_retry_failed:{j.id}",
+                )
+            )
+        buttons.append(row)
 
     buttons.append([InlineKeyboardButton("🔄 Refresh", callback_data="nav:active")])
     buttons.append([InlineKeyboardButton("🏠 Home", callback_data="nav:home")])

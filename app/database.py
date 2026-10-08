@@ -77,6 +77,10 @@ async def init_db() -> None:
                         await conn.exec_driver_sql("ALTER TABLE transfer_jobs ADD COLUMN source_thread_id INTEGER")
                     if "source_topic_name" not in existing_job_cols:
                         await conn.exec_driver_sql("ALTER TABLE transfer_jobs ADD COLUMN source_topic_name VARCHAR(255)")
+                    if "failed_message_ids" not in existing_job_cols:
+                        await conn.exec_driver_sql("ALTER TABLE transfer_jobs ADD COLUMN failed_message_ids TEXT")
+                    if "specific_message_ids" not in existing_job_cols:
+                        await conn.exec_driver_sql("ALTER TABLE transfer_jobs ADD COLUMN specific_message_ids TEXT")
             except Exception:
                 pass
 

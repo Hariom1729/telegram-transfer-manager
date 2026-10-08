@@ -977,10 +977,39 @@ async def _handle_job_control_action(query, user_id: int, data: str) -> None:
             )
         return
 
-    if action == "job_retry":
-        await transfer_manager.retry_failed_job(job_id)
-        await query.answer("Retrying failed messages...")
-        return
+    if action in ("job_retry", "job_retry_failed"):
+        job = await transfer_manager.get_job(job_id)
+        if not job:
+            await query.answer("Job not found.", show_alert=True)
+            return
+
+        retry_job = await transfer_manager.retry_failed_messages(job_id)
+        if retry_job:
+            chat_id = query.message.chat_id
+            message_id = query.message.message_id
+
+            async def edit_progress(text: str, reply_markup):
+                try:
+                    await query.get_bot().edit_message_text(
+                        chat_id=chat_id,
+                        message_id=message_id,
+                        text=text,
+                        reply_markup=reply_markup,
+                    )
+                except Exception:
+                    pass
+
+            transfer_worker.register_progress_callback(retry_job.id, edit_progress)
+            await transfer_manager.start_job(retry_job.id)
+            await query.answer(f"Retransferring {retry_job.total_messages} failed message(s)...")
+            await query.edit_message_text(
+                f"🔄 Retransferring {retry_job.total_messages} failed message(s) (Transfer #{retry_job.id})...\nStarting transfer engine..."
+            )
+            return
+        else:
+            await transfer_manager.retry_failed_job(job_id)
+            await query.answer("Retrying transfer...")
+            return
 
     if action == "job_view":
         job = await transfer_manager.get_job(job_id)
@@ -1002,16 +1031,18 @@ async def _handle_job_control_action(query, user_id: int, data: str) -> None:
         if job.error_summary:
             detail_text += f"\nError: {job.error_summary}\n"
 
-        kb = InlineKeyboardMarkup(
-            [
+        buttons = []
+        if job.failed_messages > 0:
+            buttons.append(
                 [
                     InlineKeyboardButton(
-                        "🔄 Retry Failed", callback_data=f"job_retry:{job.id}"
+                        f"🔄 Retransfer {job.failed_messages} Failed Msg",
+                        callback_data=f"job_retry_failed:{job.id}",
                     )
-                ],
-                [InlineKeyboardButton("🏠 Home", callback_data="nav:home")],
-            ]
-        )
+                ]
+            )
+        buttons.append([InlineKeyboardButton("🏠 Home", callback_data="nav:home")])
+        kb = InlineKeyboardMarkup(buttons)
         await query.edit_message_text(
             text=detail_text, reply_markup=kb, parse_mode="Markdown"
         )

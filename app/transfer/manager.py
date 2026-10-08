@@ -4,6 +4,7 @@ import logging
 from typing import List, Optional
 from sqlalchemy import desc, select, update
 from app.database import get_session
+from app.models.transfer_error import TransferError
 from app.models.transfer_job import JobStatus, TransferJob
 from app.transfer.queue import transfer_queue
 from app.transfer.worker import transfer_worker
@@ -48,6 +49,7 @@ class TransferManager:
         start_message_id: Optional[int] = None,
         end_message_id: Optional[int] = None,
         total_messages: int = 0,
+        specific_message_ids: Optional[str] = None,
     ) -> TransferJob:
         if (total_messages == 0 or total_messages is None) and start_message_id and end_message_id:
             total_messages = max(0, end_message_id - start_message_id + 1)
@@ -69,6 +71,7 @@ class TransferManager:
                 start_message_id=start_message_id,
                 end_message_id=end_message_id,
                 total_messages=total_messages,
+                specific_message_ids=specific_message_ids,
                 status=JobStatus.QUEUED.value,
             )
             session.add(job)
@@ -148,6 +151,71 @@ class TransferManager:
 
         await transfer_queue.enqueue(job_id)
         return True
+
+    async def retry_failed_messages(self, job_id: int) -> Optional[TransferJob]:
+        """Create and return a new job targeting ONLY the messages that failed in an earlier job."""
+        async with get_session() as session:
+            res = await session.execute(
+                select(TransferJob).where(TransferJob.id == job_id)
+            )
+            orig_job = res.scalar_one_or_none()
+            if not orig_job:
+                return None
+
+            failed_ids: List[int] = []
+            if orig_job.failed_message_ids:
+                try:
+                    failed_ids = [
+                        int(x.strip())
+                        for x in orig_job.failed_message_ids.split(",")
+                        if x.strip().isdigit()
+                    ]
+                except Exception:
+                    failed_ids = []
+
+            if not failed_ids:
+                # Query TransferError table as fallback
+                err_stmt = select(TransferError.source_message_id).where(
+                    TransferError.transfer_job_id == job_id
+                )
+                err_res = await session.execute(err_stmt)
+                failed_ids = sorted(list(set(err_res.scalars().all())))
+
+            if not failed_ids:
+                return None
+
+            failed_ids.sort()
+            failed_ids_str = ",".join(map(str, failed_ids))
+
+            new_job = TransferJob(
+                owner_id=orig_job.owner_id,
+                telegram_account_id=orig_job.telegram_account_id,
+                source_chat_id=orig_job.source_chat_id,
+                source_chat_title=orig_job.source_chat_title,
+                source_thread_id=orig_job.source_thread_id,
+                source_topic_name=orig_job.source_topic_name,
+                destination_chat_id=orig_job.destination_chat_id,
+                destination_chat_title=orig_job.destination_chat_title,
+                destination_thread_id=orig_job.destination_thread_id,
+                topic_name=orig_job.topic_name,
+                content_types=orig_job.content_types,
+                duplicate_mode="overwrite",  # Must allow transfer since we are explicitly retrying failed
+                specific_message_ids=failed_ids_str,
+                total_messages=len(failed_ids),
+                status=JobStatus.QUEUED.value,
+            )
+            session.add(new_job)
+            await session.flush()
+            new_job_id = new_job.id
+
+        logger.info(
+            "Created retry failed job=%s for orig_job=%s with %s message(s): %s",
+            new_job_id,
+            job_id,
+            len(failed_ids),
+            failed_ids_str,
+        )
+        return new_job
 
     async def recover_interrupted_jobs(self) -> int:
         """Section 32: Recover any jobs that were running when the process last crashed or restarted."""

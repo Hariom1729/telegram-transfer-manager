@@ -62,9 +62,18 @@ class ProgressTracker:
         is_local = "Local" in self.destination_title or "💾" in self.destination_title
         effective_total = max(self.total_messages, self.processed_messages) if self.total_messages > 0 else self.processed_messages
 
-        progress_bar = format_progress_bar(
-            self.processed_messages, self.total_messages
-        )
+        if status_label == "COMPLETED":
+            progress_bar = format_progress_bar(100, 100)
+        elif self.total_messages > 0:
+            progress_bar = format_progress_bar(
+                self.processed_messages, self.total_messages
+            )
+        elif self.processed_messages > 0:
+            active_step = (self.processed_messages % 15) + 1
+            bar = "█" * active_step + "░" * (15 - active_step)
+            progress_bar = f"{bar} Processing..."
+        else:
+            progress_bar = format_progress_bar(0, 0)
         speed_str = f"{self.speed:.1f} msg/s" if self.speed > 0 else "-- msg/s"
 
         topic_section = (
