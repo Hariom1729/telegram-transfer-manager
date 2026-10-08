@@ -7,7 +7,9 @@ from pathlib import Path
 import time
 from typing import Callable, Coroutine, Dict, List, Optional
 from sqlalchemy import select
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 from telethon import TelegramClient
+from telethon.tl.types import Channel
 from app.database import get_session
 from app.models.transfer_error import TransferError
 from app.models.transfer_job import JobStatus, TransferJob
@@ -49,7 +51,7 @@ class TransferWorker:
         return self._active_trackers.get(job_id)
 
     async def execute_job(self, job_id: int) -> None:
-        """Main execution loop for a transfer job."""
+        """Main execution loop for a transfer job with robust pre-validation and state progression."""
         self._pause_flags[job_id] = False
         self._cancel_flags[job_id] = False
 
@@ -62,54 +64,14 @@ class TransferWorker:
                 logger.error("Job %s not found in database", job_id)
                 return
 
-            # Verify and update state
-            job.status = JobStatus.RUNNING.value
-            if not job.started_at:
-                job.started_at = datetime.now(timezone.utc)
-            await session.commit()
-
         logger.info(
-            "Transfer started job=%s source=%s destination=%s",
+            "Transfer starting job=%s source=%s destination=%s",
             job.id,
             job.source_chat_id,
             job.destination_chat_id,
         )
 
-        # Retrieve MTProto client
-        client = None
-        if job.telegram_account_id:
-            client = await user_client_manager.get_client_for_account(
-                job.telegram_account_id
-            )
-
-        if not client or not client.is_connected():
-            await self._fail_job(
-                job_id,
-                "Telegram account session is inactive or disconnected. Re-connect account in menu.",
-            )
-            return
-
-        is_local_download = (job.destination_chat_id == 0)
-        local_dest_dir: Optional[Path] = None
-        dest_entity = None
-
-        try:
-            # Resolve entities
-            source_entity = await client.get_entity(job.source_chat_id)
-            if is_local_download:
-                raw_title = job.source_chat_title or f"chat_{job.source_chat_id}"
-                safe_folder = "".join(
-                    c for c in raw_title if c.isalnum() or c in (" ", "_", "-")
-                ).strip() or f"chat_{job.source_chat_id}"
-                local_dest_dir = Path("downloads") / safe_folder
-                local_dest_dir.mkdir(parents=True, exist_ok=True)
-            else:
-                dest_entity = await client.get_entity(job.destination_chat_id)
-        except Exception as e:
-            await self._fail_job(job_id, f"Failed to access source or destination: {e}")
-            return
-
-        # Setup Progress Tracker
+        # 1. Setup Progress Tracker immediately so user sees state changes
         tracker_cb = self._progress_callbacks.get(job_id)
         tracker = ProgressTracker(
             job_id=job.id,
@@ -123,6 +85,119 @@ class TransferWorker:
         tracker.processed_messages = job.processed_messages
         tracker.successful_messages = job.successful_messages
         tracker.skipped_messages = job.skipped_messages
+        tracker.failed_messages = job.failed_messages
+        self._active_trackers[job_id] = tracker
+
+        # 2. Mark VALIDATING state in database and UI
+        async with get_session() as session:
+            res = await session.execute(
+                select(TransferJob).where(TransferJob.id == job_id)
+            )
+            db_job = res.scalar_one_or_none()
+            if db_job:
+                db_job.status = JobStatus.VALIDATING.value
+                await session.commit()
+
+        await tracker.update(force=True, status_label="VALIDATING")
+
+        # 3. Pre-validation: Retrieve persistent MTProto client
+        client = None
+        if job.telegram_account_id:
+            try:
+                client = await user_client_manager.get_active_client(
+                    job.telegram_account_id
+                )
+            except Exception as e:
+                await self._fail_job(job_id, f"Session storage error: {e}")
+                return
+
+        # 4. Pre-validation: Verify client connection and authorization
+        if not client or not client.is_connected():
+            await self._fail_job(
+                job_id,
+                "Telegram account session is inactive or disconnected. Re-connect account in Connected Accounts.",
+            )
+            return
+
+        try:
+            if not await client.is_user_authorized():
+                await self._fail_job(
+                    job_id,
+                    "Telegram account session has expired or is unauthorized. Please re-authenticate.",
+                )
+                return
+        except Exception as e:
+            await self._fail_job(job_id, f"Authentication check error: {e}")
+            return
+
+        is_local_download = (job.destination_chat_id == 0)
+        local_dest_dir: Optional[Path] = None
+        source_entity = None
+        dest_entity = None
+
+        # 5. Pre-validation: Resolve source entity and accessibility
+        try:
+            source_entity = await client.get_entity(job.source_chat_id)
+        except Exception as e:
+            await self._fail_job(
+                job_id,
+                f"Cannot access source chat ({job.source_chat_title or job.source_chat_id}): {e}",
+            )
+            return
+
+        # 6. Pre-validation: Resolve destination entity and permissions
+        if is_local_download:
+            raw_title = job.source_chat_title or f"chat_{job.source_chat_id}"
+            safe_folder = "".join(
+                c for c in raw_title if c.isalnum() or c in (" ", "_", "-")
+            ).strip() or f"chat_{job.source_chat_id}"
+            local_dest_dir = Path("downloads") / safe_folder
+            local_dest_dir.mkdir(parents=True, exist_ok=True)
+            tracker.destination_title = f"Local Storage (`downloads/{safe_folder}/`)"
+        else:
+            try:
+                dest_entity = await client.get_entity(job.destination_chat_id)
+            except Exception as e:
+                await self._fail_job(
+                    job_id,
+                    f"Cannot access destination chat ({job.destination_chat_title or job.destination_chat_id}): {e}",
+                )
+                return
+
+            # Verify send permissions
+            is_creator = getattr(dest_entity, "creator", False)
+            admin_rights = getattr(dest_entity, "admin_rights", None)
+            default_banned = getattr(dest_entity, "default_banned_rights", None)
+
+            if not is_creator:
+                if isinstance(dest_entity, Channel) and not getattr(dest_entity, "megagroup", False):
+                    # Broadcast channel: must have post_messages permission
+                    if not admin_rights or not getattr(admin_rights, "post_messages", False):
+                        await self._fail_job(
+                            job_id,
+                            "Your account does not have permission to post messages in the destination channel.",
+                        )
+                        return
+                elif default_banned and getattr(default_banned, "send_messages", False):
+                    await self._fail_job(
+                        job_id,
+                        "Your account is restricted from sending messages in the destination chat.",
+                    )
+                    return
+
+        # 7. Validation succeeded: Transition to RUNNING state
+        async with get_session() as session:
+            res = await session.execute(
+                select(TransferJob).where(TransferJob.id == job_id)
+            )
+            db_job = res.scalar_one_or_none()
+            if db_job:
+                db_job.status = JobStatus.RUNNING.value
+                if not db_job.started_at:
+                    db_job.started_at = datetime.now(timezone.utc)
+                await session.commit()
+
+        await tracker.update(force=True, status_label="RUNNING")
         tracker.failed_messages = job.failed_messages
         self._active_trackers[job_id] = tracker
 
@@ -350,16 +425,23 @@ class TransferWorker:
                 job.error_summary = reason
         logger.error("Transfer failed job=%s reason=%s", job_id, reason)
 
+        fail_kb = InlineKeyboardMarkup(
+            [[InlineKeyboardButton("🏠 Home", callback_data="nav:home")]]
+        )
         tracker = self._active_trackers.get(job_id)
         if tracker:
-            fail_kb = InlineKeyboardMarkup(
-                [[InlineKeyboardButton("🏠 Home", callback_data="nav:home")]]
-            )
             await tracker.update(
                 force=True,
-                status_label=f"FAILED",
+                status_label="FAILED",
                 custom_keyboard=fail_kb,
+                error_detail=reason,
             )
+        elif job_id in self._progress_callbacks:
+            cb = self._progress_callbacks[job_id]
+            try:
+                await cb(f"❌ *Transfer #{job_id} (FAILED)*\n\n⚠️ *Reason:* _{reason}_", fail_kb)
+            except Exception:
+                pass
 
     async def _complete_job(
         self, job_id: int, tracker: ProgressTracker, duration: float

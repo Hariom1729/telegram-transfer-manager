@@ -271,12 +271,20 @@ async def text_message_handler(
                 account_id = accounts[0].id
                 session_store.update_data(user_id, account_id=account_id)
 
+        prompt_msg_id = udata.get("cp_prompt_msg_id")
+        try:
+            await message.delete()
+        except Exception:
+            pass
+
         await ChatPicker.handle_search_query(
             message_or_query=message,
             user_id=user_id,
             target="source",
             query_text=text,
             page=0,
+            edit_message_id=prompt_msg_id,
+            bot=context.bot,
         )
         return
 
@@ -289,12 +297,20 @@ async def text_message_handler(
                 account_id = accounts[0].id
                 session_store.update_data(user_id, account_id=account_id)
 
+        prompt_msg_id = udata.get("cp_prompt_msg_id")
+        try:
+            await message.delete()
+        except Exception:
+            pass
+
         await ChatPicker.handle_search_query(
             message_or_query=message,
             user_id=user_id,
             target="dest",
             query_text=text,
             page=0,
+            edit_message_id=prompt_msg_id,
+            bot=context.bot,
         )
         return
 

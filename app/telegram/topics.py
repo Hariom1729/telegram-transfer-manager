@@ -189,9 +189,19 @@ class TopicManager:
                     elif topic_id is None:
                         topic_id = msg.id
 
-            # Fallback if not found in update structure
+            # Fallback: query topics from Telegram to get the exact created topic ID
             if topic_id is None:
-                topic_id = random_id % 1000000
+                try:
+                    server_topics = await cls.get_topics(client, chat_id, force_refresh=True)
+                    for t in server_topics:
+                        if t.title == title:
+                            topic_id = t.id
+                            break
+                except Exception as ex:
+                    logger.warning("Could not resolve topic_id from server topics: %s", ex)
+
+            if topic_id is None:
+                topic_id = 1  # Fallback to General topic only if completely unable to resolve
 
             new_topic = DiscoveredTopic(
                 id=topic_id,

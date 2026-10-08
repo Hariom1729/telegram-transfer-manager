@@ -21,9 +21,10 @@ async def main() -> None:
     setup_logging()
     logger.info("Initializing Telegram Transfer Manager...")
 
-    # 2. Validate configuration
+    # 2. Validate configuration and log storage diagnostics
     try:
         settings.validate()
+        settings.run_startup_diagnostics()
     except ValueError as e:
         logger.critical("Configuration validation failed: %s", e)
         print(f"\n[FATAL CONFIG ERROR] {e}\nPlease check your .env file.\n")

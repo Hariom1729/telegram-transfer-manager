@@ -9,8 +9,14 @@ from dotenv import load_dotenv
 load_dotenv()
 
 
+PROJECT_ROOT: Path = Path(__file__).resolve().parent.parent
+
+
 class Settings:
     """Application settings loaded from environment variables."""
+
+    # Project root
+    PROJECT_ROOT: Path = PROJECT_ROOT
 
     # Telegram Bot Token
     BOT_TOKEN: str = os.getenv("BOT_TOKEN", "").strip()
@@ -29,9 +35,14 @@ class Settings:
     ]
 
     # Database
-    DATABASE_URL: str = os.getenv(
+    _raw_db_url = os.getenv(
         "DATABASE_URL", "sqlite+aiosqlite:///./data/telegram.db"
     ).strip()
+    if _raw_db_url.startswith("sqlite+aiosqlite:///./") or _raw_db_url.startswith("sqlite+aiosqlite://./"):
+        _rel_db_path = _raw_db_url.split("sqlite+aiosqlite:///")[-1].lstrip("./")
+        DATABASE_URL: str = f"sqlite+aiosqlite:///{PROJECT_ROOT / _rel_db_path}"
+    else:
+        DATABASE_URL: str = _raw_db_url
 
     # Logging
     LOG_LEVEL: str = os.getenv("LOG_LEVEL", "INFO").strip().upper()
@@ -45,10 +56,12 @@ class Settings:
         os.getenv("PROGRESS_UPDATE_INTERVAL", "3").strip()
     )
 
-    # Session Storage
-    SESSION_DIRECTORY: str = os.getenv(
-        "SESSION_DIRECTORY", "./data/sessions"
-    ).strip()
+    # Session Storage (Always absolute path anchored to PROJECT_ROOT)
+    _raw_session_dir = os.getenv("SESSION_DIRECTORY", "./data/sessions").strip()
+    _session_p = Path(_raw_session_dir)
+    SESSION_DIRECTORY: str = str(
+        (_session_p if _session_p.is_absolute() else (PROJECT_ROOT / _session_p)).resolve()
+    )
 
     @classmethod
     def ensure_directories(cls) -> None:
@@ -56,13 +69,44 @@ class Settings:
         Path(cls.SESSION_DIRECTORY).mkdir(parents=True, exist_ok=True)
         # Also ensure directory of sqlite database exists if sqlite URL
         if "sqlite" in cls.DATABASE_URL:
-            # Parse path from sqlite URL
-            # e.g., sqlite+aiosqlite:///./data/telegram.db -> ./data/telegram.db
             db_part = cls.DATABASE_URL.split(":///")[-1]
             if db_part and not db_part.startswith(":memory:"):
                 db_path = Path(db_part).parent
                 db_path.mkdir(parents=True, exist_ok=True)
-        Path("./logs").mkdir(parents=True, exist_ok=True)
+        Path(cls.PROJECT_ROOT / "logs").mkdir(parents=True, exist_ok=True)
+        Path(cls.PROJECT_ROOT / "downloads").mkdir(parents=True, exist_ok=True)
+
+    @classmethod
+    def run_startup_diagnostics(cls) -> None:
+        """Log storage diagnostic information without logging secrets."""
+        import logging
+
+        diag_logger = logging.getLogger("app.diagnostics")
+        cls.ensure_directories()
+
+        sess_dir = Path(cls.SESSION_DIRECTORY)
+        dir_writable = os.access(sess_dir, os.W_OK)
+        diag_logger.info("Telethon session directory: %s", sess_dir)
+        diag_logger.info("Directory writable: %s", dir_writable)
+
+        session_files = list(sess_dir.glob("*.session"))
+        if session_files:
+            for sf in session_files:
+                sf_writable = os.access(sf, os.W_OK)
+                diag_logger.info("Session file: %s", sf)
+                diag_logger.info("Session writable: %s", sf_writable)
+        else:
+            diag_logger.info("No existing .session files found in session directory.")
+
+        if "sqlite" in cls.DATABASE_URL:
+            db_part = cls.DATABASE_URL.split(":///")[-1]
+            if db_part and not db_part.startswith(":memory:"):
+                db_file = Path(db_part)
+                db_dir_writable = os.access(db_file.parent, os.W_OK)
+                diag_logger.info("Database path: %s", db_file)
+                diag_logger.info("Database directory writable: %s", db_dir_writable)
+                if db_file.exists():
+                    diag_logger.info("Database file writable: %s", os.access(db_file, os.W_OK))
 
     @classmethod
     def is_admin(cls, user_id: int) -> bool:
@@ -83,4 +127,5 @@ class Settings:
 
 
 settings = Settings()
+
 

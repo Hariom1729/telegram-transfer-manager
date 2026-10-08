@@ -1,20 +1,25 @@
-"""Telethon MTProto User Client Manager."""
-
 import asyncio
 import logging
 import os
 from pathlib import Path
+import shutil
+import sqlite3
 import time
 from typing import Any, Dict, List, Optional, Tuple
 from sqlalchemy import select
 from telethon import TelegramClient
 from telethon.errors import (
+    AuthKeyUnregisteredError,
     FloodWaitError,
     PasswordHashInvalidError,
     PhoneCodeExpiredError,
     PhoneCodeInvalidError,
     PhoneNumberInvalidError,
+    SessionExpiredError,
     SessionPasswordNeededError,
+    SessionRevokedError,
+    UserDeactivatedBanError,
+    UserDeactivatedError,
 )
 from telethon.tl.types import User as TelethonUser
 from app.config import settings
@@ -23,6 +28,17 @@ from app.models.telegram_account import TelegramAccount
 from app.models.user import User
 
 logger = logging.getLogger(__name__)
+
+
+class SessionStorageError(Exception):
+    """Raised when the Telethon SQLite session cannot be accessed or written due to storage/lock error."""
+    pass
+
+
+class TelegramAuthError(Exception):
+    """Raised when Telegram authorization has genuinely expired or been revoked."""
+    pass
+
 
 
 class UserClientManager:
@@ -60,10 +76,20 @@ class UserClientManager:
             return None
         return state
 
+    async def get_active_client(
+        self, account_id: int
+    ) -> Optional[TelegramClient]:
+        """Convenience alias for get_client_for_account."""
+        return await self.get_client_for_account(account_id)
+
     async def get_client_for_account(
         self, account_id: int
     ) -> Optional[TelegramClient]:
-        """Get or initialize an active Telethon client for an account ID."""
+        """Get or initialize the persistent Telethon client for an account ID.
+
+        Guarantees strictly 1 client per account session, safe reconnection,
+        and cleanly isolates SQLite session storage errors from real auth revocation.
+        """
         async with self._lock:
             if account_id in self._clients:
                 client = self._clients[account_id]
@@ -73,8 +99,25 @@ class UserClientManager:
                     await client.connect()
                     if await client.is_user_authorized():
                         return client
+                except sqlite3.OperationalError as e:
+                    logger.error("Session storage OperationalError for account %s: %s", account_id, e)
+                    try:
+                        if client.session and hasattr(client.session, "close"):
+                            client.session.close()
+                        await client.disconnect()
+                    except Exception:
+                        pass
+                    self._clients.pop(account_id, None)
+                    raise SessionStorageError(f"Session storage error: {e}")
                 except Exception as e:
                     logger.warning("Failed to reconnect cached client %s: %s", account_id, e)
+                    try:
+                        if client.session and hasattr(client.session, "close"):
+                            client.session.close()
+                        await client.disconnect()
+                    except Exception:
+                        pass
+                    self._clients.pop(account_id, None)
 
             # Retrieve account record from database
             async with get_session() as session:
@@ -90,23 +133,122 @@ class UserClientManager:
                 raise ValueError("API_ID and API_HASH must be configured in environment.")
 
             session_file = self._get_session_path(account.session_name)
+            session_file_path = Path(
+                session_file if session_file.endswith(".session") else f"{session_file}.session"
+            )
+
+            # Check if session directory is writable
+            sess_dir = Path(settings.SESSION_DIRECTORY)
+            if not os.access(sess_dir, os.W_OK):
+                logger.error("Session directory %s is not writable!", sess_dir)
+                raise SessionStorageError(f"Session directory {sess_dir} is not writable.")
+
+            # Automatic migration for legacy session files if account_X.session is absent
+            if not session_file_path.exists() and account.phone_number:
+                clean_phone = account.phone_number.lstrip("+").strip()
+                legacy_file = sess_dir / f"user_{clean_phone}.session"
+                if legacy_file.exists():
+                    try:
+                        shutil.copy2(legacy_file, session_file_path)
+                        logger.info("Migrated legacy session %s -> %s", legacy_file, session_file_path)
+                    except Exception as ex:
+                        logger.warning("Failed to copy legacy session: %s", ex)
+
+            # Ensure session file has write permissions if it exists
+            if session_file_path.exists():
+                if not os.access(session_file_path, os.W_OK):
+                    try:
+                        os.chmod(session_file_path, 0o644)
+                    except Exception as ex:
+                        logger.warning("Failed to set write permissions on %s: %s", session_file_path, ex)
+
             client = TelegramClient(
                 session=session_file,
                 api_id=settings.API_ID,
                 api_hash=settings.API_HASH,
             )
 
-            await client.connect()
-            if not await client.is_user_authorized():
+            try:
+                await client.connect()
+                is_authorized = await client.is_user_authorized()
+            except sqlite3.OperationalError as e:
+                logger.error("Session storage OperationalError connecting account %s: %s", account_id, e)
+                try:
+                    if client.session and hasattr(client.session, "close"):
+                        client.session.close()
+                    await client.disconnect()
+                except Exception:
+                    pass
+                raise SessionStorageError(f"Session storage error: {e}")
+            except (
+                AuthKeyUnregisteredError,
+                UserDeactivatedError,
+                UserDeactivatedBanError,
+                SessionRevokedError,
+                SessionExpiredError,
+            ) as e:
+                logger.warning("Telegram authentication revoked for account %s: %s", account_id, e)
+                try:
+                    if client.session and hasattr(client.session, "close"):
+                        client.session.close()
+                    await client.disconnect()
+                except Exception:
+                    pass
+                async with get_session() as session:
+                    res = await session.execute(
+                        select(TelegramAccount).where(TelegramAccount.id == account_id)
+                    )
+                    acc = res.scalar_one_or_none()
+                    if acc:
+                        acc.is_active = False
+                return None
+            except Exception as e:
+                logger.error("Unexpected error connecting client for account %s: %s", account_id, e)
+                try:
+                    if client.session and hasattr(client.session, "close"):
+                        client.session.close()
+                    await client.disconnect()
+                except Exception:
+                    pass
+                return None
+
+            if not is_authorized:
                 logger.warning(
                     "Account id=%s is no longer authorized. Session may have expired.",
                     account_id,
                 )
-                await client.disconnect()
+                try:
+                    if client.session and hasattr(client.session, "close"):
+                        client.session.close()
+                    await client.disconnect()
+                except Exception:
+                    pass
                 return None
 
             self._clients[account_id] = client
             return client
+
+    async def reconnect_account(self, account_id: int) -> Tuple[bool, str]:
+        """Safely disconnect, release SQLite locks, and re-establish connection for an account."""
+        async with self._lock:
+            old_client = self._clients.pop(account_id, None)
+            if old_client:
+                try:
+                    if old_client.session and hasattr(old_client.session, "close"):
+                        old_client.session.close()
+                    await old_client.disconnect()
+                except Exception:
+                    pass
+
+        try:
+            client = await self.get_client_for_account(account_id)
+            if client and client.is_connected() and await client.is_user_authorized():
+                return True, "Account reconnected successfully!"
+            return False, "Failed to reconnect account. Please check credentials or log in again."
+        except SessionStorageError as e:
+            return False, f"Session storage error: {e}"
+        except Exception as e:
+            return False, f"Reconnect failed: {e}"
 
     async def start_login(
         self, telegram_bot_user_id: int, phone_number: str
@@ -164,6 +306,16 @@ class UserClientManager:
                     acc_rec.session_name = f"account_{acc_rec.id}"
                     await session.flush()
                 account_id = acc_rec.id
+
+            # Ensure any previous active client for this account is disconnected and removed
+            if account_id in self._clients:
+                old_client = self._clients.pop(account_id)
+                try:
+                    if old_client.session and hasattr(old_client.session, "close"):
+                        old_client.session.close()
+                    await old_client.disconnect()
+                except Exception:
+                    pass
 
             session_name = f"account_{account_id}"
             session_file = self._get_session_path(session_name)
@@ -377,6 +529,8 @@ class UserClientManager:
         client = state.get("client")
         if client:
             try:
+                if client.session and hasattr(client.session, "close"):
+                    client.session.close()
                 await client.disconnect()
             except Exception:
                 pass
@@ -397,7 +551,8 @@ class UserClientManager:
             except Exception:
                 pass
 
-        if session_name:
+        # Only clean temporary pending sessions, preserve activated account files
+        if session_name and session_name.startswith("pending_"):
             session_file = self._get_session_path(session_name)
             for ext in ["", ".session", ".session-journal"]:
                 fpath = Path(session_file + ext)
@@ -410,11 +565,13 @@ class UserClientManager:
         return True
 
     async def disconnect_account(self, account_id: int) -> bool:
-        """Disconnect and deactivate an account, removing its session file."""
+        """Disconnect and deactivate an account while preserving its session file."""
         async with self._lock:
             client = self._clients.pop(account_id, None)
             if client:
                 try:
+                    if client.session and hasattr(client.session, "close"):
+                        client.session.close()
                     await client.disconnect()
                 except Exception as e:
                     logger.warning("Error disconnecting client %s: %s", account_id, e)
@@ -428,14 +585,6 @@ class UserClientManager:
                 return False
 
             account.is_active = False
-            session_file = self._get_session_path(account.session_name)
-            for ext in ["", ".session", ".session-journal"]:
-                fpath = Path(session_file + ext)
-                if fpath.exists():
-                    try:
-                        fpath.unlink()
-                    except Exception as e:
-                        logger.warning("Could not delete session file %s: %s", fpath, e)
 
         return True
 
@@ -459,8 +608,10 @@ class UserClientManager:
             for user_id in list(self._pending_auth.keys()):
                 await self._cleanup_pending(user_id)
 
-            for acc_id, client in self._clients.items():
+            for acc_id, client in list(self._clients.items()):
                 try:
+                    if client.session and hasattr(client.session, "close"):
+                        client.session.close()
                     await client.disconnect()
                 except Exception as e:
                     logger.warning("Error disconnecting client %s: %s", acc_id, e)

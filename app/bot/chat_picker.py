@@ -207,29 +207,41 @@ class ChatPicker:
             else BotState.WIZARD_DEST_INPUT
         )
         session_store.set_state(user_id, state)
-        session_store.update_data(user_id, cp_target=target, cp_view="search_input")
 
         label = "Source" if target == "source" else "Destination"
         text = (
             f"🔎 *Search {label} Chats*\n\n"
-            "Enter any search text (channel title, @username, or keywords).\n\n"
-            "💡 *Tip:* You do not need to type the full name.\n"
+            "Type at least 1 character to search chats.\n\n"
+            "💡 *Tip:* Results update dynamically as you type.\n"
             "Examples:\n"
-            "• `dr` → finds Driver Updates, Driver Tutorials\n"
-            "• `news` → finds all news channels\n"
-            "• `-1001234567890` → finds specific chat by ID"
+            "• `a` → all chats matching 'a'\n"
+            "• `c` → courses, coding groups\n"
+            "• `py` → Python channels\n"
+            "• `-1001234567890` → chat by ID"
         )
         kb = InlineKeyboardMarkup(
             [[InlineKeyboardButton("⬅️ Back", callback_data=f"cp:{target}:menu")]]
         )
+        prompt_msg_id = None
         if hasattr(query_or_message, "edit_message_text"):
-            await query_or_message.edit_message_text(
+            msg = await query_or_message.edit_message_text(
                 text=text, reply_markup=kb, parse_mode="Markdown"
+            )
+            prompt_msg_id = getattr(msg, "message_id", None) or getattr(
+                getattr(query_or_message, "message", None), "message_id", None
             )
         else:
-            await query_or_message.reply_text(
+            msg = await query_or_message.reply_text(
                 text=text, reply_markup=kb, parse_mode="Markdown"
             )
+            prompt_msg_id = getattr(msg, "message_id", None)
+
+        session_store.update_data(
+            user_id,
+            cp_target=target,
+            cp_view="search_input",
+            cp_prompt_msg_id=prompt_msg_id,
+        )
 
     @classmethod
     async def handle_search_query(
@@ -239,8 +251,10 @@ class ChatPicker:
         target: str,
         query_text: str,
         page: int = 0,
+        edit_message_id: Optional[int] = None,
+        bot: Optional[Any] = None,
     ) -> None:
-        """Search dialogs with ranking and display paginated results."""
+        """Search dialogs with ranking and display paginated suggestions."""
         udata = session_store.get_data(user_id)
         account_id = udata.get("account_id")
         if not account_id:
@@ -289,6 +303,10 @@ class ChatPicker:
             await cls._show_error(message_or_query, target)
             return
 
+        # For destination search, only include chats the account can post to
+        if target == "dest":
+            results = [c for c in results if c.can_post]
+
         session_store.update_data(
             user_id,
             cp_target=target,
@@ -305,7 +323,7 @@ class ChatPicker:
             text = (
                 f"🔎 *Search {label} Results for:* `{clean_q}`\n\n"
                 "No accessible chats found matching your search.\n\n"
-                "Try a shorter query, check spelling, or browse by category:"
+                "Try another search term, check spelling, or browse by category:"
             )
             kb = InlineKeyboardMarkup(
                 [
@@ -339,14 +357,41 @@ class ChatPicker:
                 current_view="search",
             )
 
-        if hasattr(message_or_query, "edit_message_text"):
-            await message_or_query.edit_message_text(
-                text=text, reply_markup=kb, parse_mode="Markdown"
-            )
-        else:
-            await message_or_query.reply_text(
-                text=text, reply_markup=kb, parse_mode="Markdown"
-            )
+        # In-place message edit to prevent message spam when typing
+        edited = False
+        chat_id = getattr(message_or_query, "chat_id", None) or getattr(
+            getattr(message_or_query, "message", None), "chat_id", None
+        )
+
+        if edit_message_id and bot and chat_id:
+            try:
+                await bot.edit_message_text(
+                    chat_id=chat_id,
+                    message_id=edit_message_id,
+                    text=text,
+                    reply_markup=kb,
+                    parse_mode="Markdown",
+                )
+                edited = True
+            except Exception:
+                pass
+
+        if not edited:
+            if hasattr(message_or_query, "edit_message_text"):
+                try:
+                    await message_or_query.edit_message_text(
+                        text=text, reply_markup=kb, parse_mode="Markdown"
+                    )
+                except Exception:
+                    pass
+            else:
+                sent_msg = await message_or_query.reply_text(
+                    text=text, reply_markup=kb, parse_mode="Markdown"
+                )
+                session_store.update_data(
+                    user_id,
+                    cp_prompt_msg_id=sent_msg.message_id,
+                )
 
     @classmethod
     async def show_category(
@@ -706,16 +751,24 @@ class ChatPicker:
         cls, query_or_message, target: str, reason: Optional[str] = None
     ) -> None:
         """Display error screen matching Section 17 specification."""
-        text = (
-            "❌ *Unable to load your Telegram chats.*\n\n"
-            "Possible reasons:\n"
-            "• Telegram account is disconnected\n"
-            "• Session expired\n"
-            "• Network error\n"
-            "• Telegram temporarily rate-limited the request\n"
-        )
-        if reason:
-            text += f"\n_Details: {reason}_"
+        if reason and any(k in reason.lower() for k in ("storage", "readonly", "read-only", "disk i/o", "operationalerror")):
+            text = (
+                "❌ *Telegram session storage error.*\n\n"
+                "The Telegram account session could not be written.\n\n"
+                "Please reconnect the Telegram account from:\n"
+                "*Connected Accounts* → *Reconnect*"
+            )
+        else:
+            text = (
+                "❌ *Unable to load your Telegram chats.*\n\n"
+                "Possible reasons:\n"
+                "• Telegram account is disconnected\n"
+                "• Session expired\n"
+                "• Network error\n"
+                "• Telegram temporarily rate-limited the request\n"
+            )
+            if reason:
+                text += f"\n_Details: {reason}_"
 
         kb = cls.build_error_keyboard(target)
         if hasattr(query_or_message, "edit_message_text"):

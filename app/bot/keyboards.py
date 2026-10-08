@@ -39,11 +39,19 @@ def build_accounts_keyboard(
     ]
     for acc in accounts:
         display_name = acc.first_name or acc.username or acc.phone_number
+        phone_suffix = acc.phone_number[-4:] if len(acc.phone_number) >= 4 else acc.phone_number
         buttons.append(
             [
                 InlineKeyboardButton(
-                    f"👤 {display_name} ({acc.phone_number[-4:]})",
+                    f"👤 {display_name} ({phone_suffix})",
                     callback_data=f"acc:view:{acc.id}",
+                ),
+            ]
+        )
+        buttons.append(
+            [
+                InlineKeyboardButton(
+                    "🔄 Reconnect", callback_data=f"acc:reconnect:{acc.id}"
                 ),
                 InlineKeyboardButton(
                     "🗑 Disconnect", callback_data=f"acc:disconnect:{acc.id}"

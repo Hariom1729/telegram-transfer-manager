@@ -11,6 +11,7 @@ class JobStatus(str, Enum):
     """Lifecycle statuses for transfer jobs."""
 
     QUEUED = "QUEUED"
+    VALIDATING = "VALIDATING"
     RUNNING = "RUNNING"
     PAUSED = "PAUSED"
     CANCELLED = "CANCELLED"

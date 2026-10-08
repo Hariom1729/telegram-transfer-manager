@@ -33,6 +33,7 @@ class ProgressTracker:
         self.successful_messages = 0
         self.skipped_messages = 0
         self.failed_messages = 0
+        self.error_detail: Optional[str] = None
 
         self.start_time: float = time.time()
         self.last_update_time: float = 0.0
@@ -89,6 +90,8 @@ class ProgressTracker:
             f"❌ Failed: {self.failed_messages:,}\n\n"
             f"Speed: {speed_str}"
         )
+        if self.error_detail:
+            text += f"\n\n⚠️ *Reason:* _{self.error_detail}_"
         return text
 
     def get_control_keyboard(self) -> InlineKeyboardMarkup:
@@ -111,8 +114,12 @@ class ProgressTracker:
         force: bool = False,
         status_label: Optional[str] = None,
         custom_keyboard: Optional[InlineKeyboardMarkup] = None,
+        error_detail: Optional[str] = None,
     ) -> None:
         """Send throttled progress update to Telegram bot UI."""
+        if error_detail:
+            self.error_detail = error_detail
+
         if not self.update_callback:
             return
 

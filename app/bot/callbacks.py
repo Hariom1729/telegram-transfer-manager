@@ -169,8 +169,31 @@ async def handle_callback_query(
         await user_client_manager.disconnect_account(acc_id)
         accounts = await user_client_manager.list_user_accounts(user_id)
         await query.edit_message_text(
-            text="🗑 Account disconnected and session removed.",
+            text="🗑 Account disconnected.",
             reply_markup=build_accounts_keyboard(accounts),
+        )
+        return
+
+    elif data.startswith("acc:reconnect:"):
+        acc_id = int(data.split(":")[-1])
+        await query.answer("🔄 Reconnecting Telegram account...")
+        success, msg = await user_client_manager.reconnect_account(acc_id)
+        accounts = await user_client_manager.list_user_accounts(user_id)
+        if success:
+            text = (
+                "✅ *Account Reconnected Successfully!*\n\n"
+                "Your Telegram session is active and ready for transfers and discovery."
+            )
+        else:
+            text = (
+                f"❌ *Could not reconnect account.*\n\n"
+                f"Reason: _{msg}_\n\n"
+                "You can try logging in again with ➕ Connect Telegram Account."
+            )
+        await query.edit_message_text(
+            text=text,
+            reply_markup=build_accounts_keyboard(accounts),
+            parse_mode="Markdown",
         )
         return
 
