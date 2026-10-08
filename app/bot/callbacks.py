@@ -345,7 +345,7 @@ async def handle_callback_query(
             user_id,
             is_local_download=True,
             destination_chat_id=0,
-            destination_chat_title="💾 Local Storage (/downloads/)",
+            destination_chat_title="💾 Downloads Folder",
         )
         if len(accounts) == 1:
             session_store.update_data(user_id, account_id=accounts[0].id)
@@ -455,15 +455,15 @@ async def _handle_chat_picker_callback(query, user_id: int, data: str) -> None:
             await ChatPicker.refresh_dialogs(query, user_id, target)
         elif action == "pg":
             page = int(parts[3]) if len(parts) > 3 else 0
-            udata = session_store.get_data(user_id)
-            view = udata.get("cp_view", "cat")
+            t_state = ChatPicker.get_target_state(user_id, target)
+            view = t_state.get("view", "cat")
             if view == "search":
-                q = udata.get("cp_query", "")
+                q = t_state.get("query", "")
                 await ChatPicker.handle_search_query(query, user_id, target, q, page=page)
             elif view == "recent":
                 await ChatPicker.show_recent_chats(query, user_id, target, page=page)
             else:
-                cat = udata.get("cp_category", "all")
+                cat = t_state.get("category", "all")
                 await ChatPicker.show_category(query, user_id, target, cat, page=page)
         elif action == "pk":
             chat_id = int(parts[3]) if len(parts) > 3 else 0

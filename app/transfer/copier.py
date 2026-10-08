@@ -5,8 +5,13 @@ import os
 from pathlib import Path
 from typing import List, Optional
 import uuid
-from telethon import TelegramClient
+from telethon import TelegramClient, utils
 from telethon.tl.custom.message import Message
+from app.utils.paths import (
+    get_temp_download_directory,
+    get_unique_filepath,
+    sanitize_filename,
+)
 from telethon.tl.types import (
     DocumentAttributeAnimated,
     DocumentAttributeAudio,
@@ -155,11 +160,11 @@ class MessageCopier:
             )
 
         # 4. Final fallback for channels with strict restrictions:
-        # Stream download media to temporary disk file to protect low RAM servers (e.g. 1GB/2GB AWS)
+        # Stream download media to temporary disk file in OS temp storage to protect RAM
         # and delete immediately after upload
-        temp_dir = Path("data/temp")
-        temp_dir.mkdir(parents=True, exist_ok=True)
-        temp_path = temp_dir / f"stream_{message.chat_id}_{message.id}_{uuid.uuid4().hex[:8]}"
+        temp_dir = get_temp_download_directory()
+        msg_chat_id = getattr(message, "chat_id", 0)
+        temp_path = temp_dir / f"stream_{msg_chat_id}_{message.id}_{uuid.uuid4().hex[:8]}"
         downloaded_path = None
         try:
             downloaded_path = await client.download_media(message, file=str(temp_path))
@@ -190,6 +195,38 @@ class MessageCopier:
         )
 
     @classmethod
+    def get_suggested_filename(cls, message: Message) -> str:
+        """Extract original filename if available, or generate a safe media filename."""
+        # 1. Direct file name attribute
+        if getattr(message, "file", None) and getattr(message.file, "name", None):
+            return sanitize_filename(message.file.name)
+        if hasattr(message, "document") and message.document:
+            for attr in getattr(message.document, "attributes", []):
+                if hasattr(attr, "file_name") and attr.file_name:
+                    return sanitize_filename(attr.file_name)
+
+        # 2. Derive extension from media or Telethon helpers
+        ext = getattr(getattr(message, "file", None), "ext", None)
+        if not ext and hasattr(message, "media"):
+            ext = utils.get_extension(message.media) or ""
+
+        date_str = (
+            message.date.strftime("%Y-%m-%d_%H-%M-%S")
+            if getattr(message, "date", None)
+            else f"msg_{message.id}"
+        )
+
+        if getattr(message, "photo", None):
+            return f"photo_{date_str}{ext or '.jpg'}"
+        if getattr(message, "video", None):
+            return f"video_{date_str}{ext or '.mp4'}"
+        if getattr(message, "audio", None):
+            return f"audio_{date_str}{ext or '.mp3'}"
+        if getattr(message, "voice", None):
+            return f"voice_{date_str}{ext or '.ogg'}"
+        return f"media_{date_str}{ext or ''}"
+
+    @classmethod
     async def download_to_local(
         cls,
         client: TelegramClient,
@@ -199,15 +236,18 @@ class MessageCopier:
         """Download message media or text directly to a local directory.
 
         Supports restricted/copy-protected channels (noforwards) and all media types.
+        Preserves original filename, prevents collisions, and writes companion caption files.
         """
         download_dir.mkdir(parents=True, exist_ok=True)
 
         # 1. Media message (Photo, Video, Audio, Document, Voice, Animation)
         if message.media:
             try:
+                candidate_name = cls.get_suggested_filename(message)
+                target_file = get_unique_filepath(download_dir, candidate_name)
                 # Telethon's download_media handles streaming from MTProto even on restricted channels
                 downloaded_path = await client.download_media(
-                    message, file=str(download_dir)
+                    message, file=str(target_file)
                 )
                 if downloaded_path:
                     # If there's an accompanying caption, write it to a companion .caption.txt file
@@ -230,7 +270,7 @@ class MessageCopier:
         # 2. Text-only message
         text_content = (message.message or "").strip()
         if text_content:
-            txt_path = download_dir / f"msg_{message.id}.txt"
+            txt_path = get_unique_filepath(download_dir, f"msg_{message.id}.txt")
             txt_path.write_text(text_content, encoding="utf-8")
             return str(txt_path)
 

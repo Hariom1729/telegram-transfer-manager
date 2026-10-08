@@ -1,5 +1,6 @@
 """Reusable Telegram-Native Chat/Channel Picker UI for Sources and Destinations."""
 
+import inspect
 import logging
 from typing import List, Optional
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
@@ -12,11 +13,56 @@ from app.telegram.user_client import user_client_manager
 
 logger = logging.getLogger(__name__)
 
-PAGE_SIZE = 5
+PAGE_SIZE: int = 15
+RESULTS_PER_PAGE: int = 15
 
 
 class ChatPicker:
     """Unified and reusable UI component for selecting source or destination Telegram dialogs."""
+
+    # -------------------------------------------------------------------------
+    # Target-isolated State Helpers (Source vs Destination)
+    # -------------------------------------------------------------------------
+
+    @classmethod
+    def _normalize_target(cls, target: str) -> str:
+        return "src" if target in ("source", "src") else "dst"
+
+    @classmethod
+    def get_target_state(cls, user_id: int, target: str) -> dict:
+        """Retrieve isolated state for either source or destination selection."""
+        code = cls._normalize_target(target)
+        udata = session_store.get_data(user_id)
+        return {
+            "query": udata.get(f"cp_{code}_query", ""),
+            "page": udata.get(f"cp_{code}_page", 0),
+            "view": udata.get(f"cp_{code}_view", "menu"),
+            "category": udata.get(f"cp_{code}_category", "all"),
+            "chats": udata.get(f"cp_{code}_chats", []),
+            "prompt_msg_id": udata.get(f"cp_{code}_prompt_msg_id"),
+        }
+
+    @classmethod
+    def update_target_state(cls, user_id: int, target: str, **kwargs) -> None:
+        """Update isolated state for either source or destination selection."""
+        code = cls._normalize_target(target)
+        updates = {}
+        for k, v in kwargs.items():
+            updates[f"cp_{code}_{k}"] = v
+        # Backward compatibility with legacy session keys
+        if "query" in kwargs:
+            updates["cp_query"] = kwargs["query"]
+        if "page" in kwargs:
+            updates["cp_page"] = kwargs["page"]
+        if "view" in kwargs:
+            updates["cp_view"] = kwargs["view"]
+        if "category" in kwargs:
+            updates["cp_category"] = kwargs["category"]
+        if "chats" in kwargs:
+            updates["cp_active_chats"] = kwargs["chats"]
+        if "prompt_msg_id" in kwargs:
+            updates["cp_prompt_msg_id"] = kwargs["prompt_msg_id"]
+        session_store.update_data(user_id, **updates)
 
     # -------------------------------------------------------------------------
     # Keyboards
@@ -53,7 +99,7 @@ class ChatPicker:
             keyboard.append(
                 [
                     InlineKeyboardButton(
-                        "💾 Save to Local Storage (Folder)",
+                        "💾 Save to Downloads Folder",
                         callback_data="cp:dst:pk:0",
                     )
                 ]
@@ -87,7 +133,7 @@ class ChatPicker:
         buttons = []
         for chat in page_items:
             # Compact callback_data: cp:src:pk:-1001234567890 (well within 64 byte limit)
-            title_display = chat.title[:24] + ("…" if len(chat.title) > 24 else "")
+            title_display = chat.title[:26] + ("…" if len(chat.title) > 26 else "")
             buttons.append(
                 [
                     InlineKeyboardButton(
@@ -102,10 +148,10 @@ class ChatPicker:
             nav_row = []
             if page > 0:
                 nav_row.append(
-                    InlineKeyboardButton("⬅️ Prev", callback_data=f"{prefix}:pg:{page - 1}")
+                    InlineKeyboardButton("⬅️ Previous", callback_data=f"{prefix}:pg:{page - 1}")
                 )
             nav_row.append(
-                InlineKeyboardButton(f"[{page + 1}/{total_pages}]", callback_data="noop")
+                InlineKeyboardButton(f"Page {page + 1}/{total_pages}", callback_data="noop")
             )
             if page < total_pages - 1:
                 nav_row.append(
@@ -203,12 +249,13 @@ class ChatPicker:
         """Prompt the user to enter search keywords."""
         state = (
             BotState.WIZARD_SOURCE_INPUT
-            if target == "source"
+            if target in ("source", "src")
             else BotState.WIZARD_DEST_INPUT
         )
         session_store.set_state(user_id, state)
 
-        label = "Source" if target == "source" else "Destination"
+        code = cls._normalize_target(target)
+        label = "Source" if code == "src" else "Destination"
         text = (
             f"🔎 *Search {label} Chats*\n\n"
             "Type at least 1 character to search chats.\n\n"
@@ -220,7 +267,7 @@ class ChatPicker:
             "• `-1001234567890` → chat by ID"
         )
         kb = InlineKeyboardMarkup(
-            [[InlineKeyboardButton("⬅️ Back", callback_data=f"cp:{target}:menu")]]
+            [[InlineKeyboardButton("⬅️ Back", callback_data=f"cp:{code}:menu")]]
         )
         prompt_msg_id = None
         if hasattr(query_or_message, "edit_message_text"):
@@ -236,11 +283,11 @@ class ChatPicker:
             )
             prompt_msg_id = getattr(msg, "message_id", None)
 
-        session_store.update_data(
+        cls.update_target_state(
             user_id,
-            cp_target=target,
-            cp_view="search_input",
-            cp_prompt_msg_id=prompt_msg_id,
+            target,
+            view="search_input",
+            prompt_msg_id=prompt_msg_id,
         )
 
     @classmethod
@@ -277,7 +324,10 @@ class ChatPicker:
             )
             return
 
-        if not client.is_connected():
+        is_conn = client.is_connected()
+        if inspect.isawaitable(is_conn):
+            is_conn = await is_conn
+        if not is_conn:
             try:
                 await client.connect()
             except Exception as e:
@@ -304,56 +354,69 @@ class ChatPicker:
             return
 
         # For destination search, only include chats the account can post to
-        if target == "dest":
+        if target in ("dest", "dst"):
             results = [c for c in results if c.can_post]
 
-        session_store.update_data(
+        cls.update_target_state(
             user_id,
-            cp_target=target,
-            cp_view="search",
-            cp_query=query_text,
-            cp_page=page,
-            cp_active_chats=results,
+            target,
+            view="search",
+            query=query_text,
+            page=page,
+            chats=results,
         )
 
-        label = "Source" if target == "source" else "Destination"
+        code = cls._normalize_target(target)
+        prefix = f"cp:{code}"
+        label = "Source" if code == "src" else "Destination"
         clean_q = query_text.strip()
+
+        total_chats = len(results)
+        total_pages = max(1, (total_chats + PAGE_SIZE - 1) // PAGE_SIZE)
+        page = max(0, min(page, total_pages - 1))
+        start_idx = page * PAGE_SIZE
+        end_idx = min(start_idx + PAGE_SIZE, total_chats)
 
         if not results:
             text = (
-                f"🔎 *Search {label} Results for:* `{clean_q}`\n\n"
-                "No accessible chats found matching your search.\n\n"
-                "Try another search term, check spelling, or browse by category:"
+                f"🔎 *No chats found*\n\n"
+                f"Query: `{clean_q}`\n\n"
+                "Try:\n"
+                "• another keyword\n"
+                "• shorter search term\n"
+                "• username\n"
+                "• refresh chats"
             )
             kb = InlineKeyboardMarkup(
                 [
                     [
                         InlineKeyboardButton(
-                            "🔎 Try Another Search",
-                            callback_data=f"cp:{target}:search",
-                        ),
-                        InlineKeyboardButton(
-                            "📋 All Chats", callback_data=f"cp:{target}:cat:all"
-                        ),
+                            "🔄 Refresh Chats", callback_data=f"{prefix}:refresh"
+                        )
                     ],
                     [
                         InlineKeyboardButton(
-                            "🔄 Refresh Chats", callback_data=f"cp:{target}:refresh"
-                        ),
-                        InlineKeyboardButton("⬅️ Back", callback_data=f"cp:{target}:menu"),
+                            "🔎 New Search", callback_data=f"{prefix}:search"
+                        )
+                    ],
+                    [
+                        InlineKeyboardButton("⬅️ Back", callback_data=f"{prefix}:menu")
                     ],
                 ]
             )
         else:
             text = (
-                f"🔎 *Search {label} Results for:* `{clean_q}`\n"
-                f"Found {len(results)} matching chats:\n\n"
+                f"🔎 *Search Results*\n\n"
+                f"Query: `{clean_q}`\n"
+                f"Found {total_chats} matching chats (Page {page + 1}/{total_pages})\n"
+                f"Showing: {start_idx + 1}–{end_idx}\n\n"
                 "Tap a chat to select it:"
             )
             kb = cls.build_list_keyboard(
                 chats=results,
                 target=target,
                 page=page,
+                page_size=PAGE_SIZE,
                 current_view="search",
             )
 
@@ -388,9 +451,10 @@ class ChatPicker:
                 sent_msg = await message_or_query.reply_text(
                     text=text, reply_markup=kb, parse_mode="Markdown"
                 )
-                session_store.update_data(
+                cls.update_target_state(
                     user_id,
-                    cp_prompt_msg_id=sent_msg.message_id,
+                    target,
+                    prompt_msg_id=sent_msg.message_id,
                 )
 
     @classmethod
@@ -425,7 +489,10 @@ class ChatPicker:
             )
             return
 
-        if not client.is_connected():
+        is_conn = client.is_connected()
+        if inspect.isawaitable(is_conn):
+            is_conn = await is_conn
+        if not is_conn:
             try:
                 await client.connect()
             except Exception as e:
@@ -451,13 +518,17 @@ class ChatPicker:
             await cls._show_error(query_or_message, target)
             return
 
-        session_store.update_data(
+        # For destination category, filter by can_post
+        if target in ("dest", "dst"):
+            results = [c for c in results if c.can_post]
+
+        cls.update_target_state(
             user_id,
-            cp_target=target,
-            cp_view="cat",
-            cp_category=category,
-            cp_page=page,
-            cp_active_chats=results,
+            target,
+            view="cat",
+            category=category,
+            page=page,
+            chats=results,
         )
 
         cat_names = {
@@ -467,7 +538,15 @@ class ChatPicker:
             "all": "📋 All Chats",
         }
         title = cat_names.get(category, "Chats")
-        label = "Source" if target == "source" else "Destination"
+        code = cls._normalize_target(target)
+        prefix = f"cp:{code}"
+        label = "Source" if code == "src" else "Destination"
+
+        total_chats = len(results)
+        total_pages = max(1, (total_chats + PAGE_SIZE - 1) // PAGE_SIZE)
+        page = max(0, min(page, total_pages - 1))
+        start_idx = page * PAGE_SIZE
+        end_idx = min(start_idx + PAGE_SIZE, total_chats)
 
         if not results:
             text = (
@@ -478,21 +557,23 @@ class ChatPicker:
                 [
                     [
                         InlineKeyboardButton(
-                            "🔄 Refresh Chats", callback_data=f"cp:{target}:refresh"
+                            "🔄 Refresh Chats", callback_data=f"{prefix}:refresh"
                         ),
-                        InlineKeyboardButton("⬅️ Back", callback_data=f"cp:{target}:menu"),
+                        InlineKeyboardButton("⬅️ Back", callback_data=f"{prefix}:menu"),
                     ]
                 ]
             )
         else:
             text = (
-                f"{title} — *Select {label}* ({len(results)})\n\n"
+                f"{title} — *Select {label}*\n"
+                f"Showing {start_idx + 1}–{end_idx} of {total_chats} (Page {page + 1}/{total_pages})\n\n"
                 "Tap a chat to select it:"
             )
             kb = cls.build_list_keyboard(
                 chats=results,
                 target=target,
                 page=page,
+                page_size=PAGE_SIZE,
                 current_view="cat",
             )
 
@@ -517,16 +598,21 @@ class ChatPicker:
         udata = session_store.get_data(user_id)
         account_id = udata.get("account_id")
 
-        recents = await ChatDiscovery.get_recent_dialogs(account_id, limit=20)
-        session_store.update_data(
+        recents = await ChatDiscovery.get_recent_dialogs(account_id, limit=30)
+        if target in ("dest", "dst"):
+            recents = [c for c in recents if c.can_post]
+
+        cls.update_target_state(
             user_id,
-            cp_target=target,
-            cp_view="recent",
-            cp_page=page,
-            cp_active_chats=recents,
+            target,
+            view="recent",
+            page=page,
+            chats=recents,
         )
 
-        label = "Sources" if target == "source" else "Destinations"
+        code = cls._normalize_target(target)
+        prefix = f"cp:{code}"
+        label = "Sources" if code == "src" else "Destinations"
         if not recents:
             text = (
                 f"📋 *Recent {label}*\n\n"
@@ -537,24 +623,32 @@ class ChatPicker:
                 [
                     [
                         InlineKeyboardButton(
-                            "🔎 Search", callback_data=f"cp:{target}:search"
+                            "🔎 Search", callback_data=f"{prefix}:search"
                         ),
                         InlineKeyboardButton(
-                            "📋 All Chats", callback_data=f"cp:{target}:cat:all"
+                            "📋 All Chats", callback_data=f"{prefix}:cat:all"
                         ),
                     ],
-                    [InlineKeyboardButton("⬅️ Back", callback_data=f"cp:{target}:menu")],
+                    [InlineKeyboardButton("⬅️ Back", callback_data=f"{prefix}:menu")],
                 ]
             )
         else:
+            total_chats = len(recents)
+            total_pages = max(1, (total_chats + PAGE_SIZE - 1) // PAGE_SIZE)
+            page = max(0, min(page, total_pages - 1))
+            start_idx = page * PAGE_SIZE
+            end_idx = min(start_idx + PAGE_SIZE, total_chats)
+
             text = (
-                f"📋 *Recent {label}*\n\n"
+                f"📋 *Recent {label}*\n"
+                f"Showing {start_idx + 1}–{end_idx} of {total_chats} (Page {page + 1}/{total_pages})\n\n"
                 "Choose from your recently selected chats:"
             )
             kb = cls.build_list_keyboard(
                 chats=recents,
                 target=target,
                 page=page,
+                page_size=PAGE_SIZE,
                 current_view="recent",
             )
 
@@ -594,18 +688,18 @@ class ChatPicker:
             await cls._show_error(query, target)
             return
 
-        # Restore current view
-        view = udata.get("cp_view", "menu")
-        page = udata.get("cp_page", 0)
+        # Restore current view with preserved query, reset to page 0 (Page 1)
+        t_state = cls.get_target_state(user_id, target)
+        view = t_state.get("view", "menu")
 
         if view == "search":
-            q = udata.get("cp_query", "")
-            await cls.handle_search_query(query, user_id, target, q, page=page)
+            q = t_state.get("query", "")
+            await cls.handle_search_query(query, user_id, target, q, page=0)
         elif view == "cat":
-            cat = udata.get("cp_category", "all")
-            await cls.show_category(query, user_id, target, cat, page=page)
+            cat = t_state.get("category", "all")
+            await cls.show_category(query, user_id, target, cat, page=0)
         elif view == "recent":
-            await cls.show_recent_chats(query, user_id, target, page=page)
+            await cls.show_recent_chats(query, user_id, target, page=0)
         else:
             await cls.show_picker(query, user_id, target)
 
@@ -616,7 +710,8 @@ class ChatPicker:
         """Handle selection of a chat by chat_id for source or destination."""
         udata = session_store.get_data(user_id)
         account_id = udata.get("account_id")
-        active_chats = udata.get("cp_active_chats", [])
+        t_state = cls.get_target_state(user_id, target)
+        active_chats = t_state.get("chats", []) or udata.get("cp_active_chats", [])
 
         # Find chat info in active list or cache
         picked: Optional[DiscoveredChat] = next(
@@ -630,7 +725,7 @@ class ChatPicker:
             if chat_id == 0:
                 picked = DiscoveredChat(
                     id=0,
-                    title="💾 Local Storage (/downloads/)",
+                    title="💾 Local Downloads Folder",
                     chat_type="private",
                     display_icon="💾",
                 )
@@ -646,14 +741,14 @@ class ChatPicker:
         if picked.id != 0:
             await ChatDiscovery.record_chat_selection(account_id, picked)
 
-        if target == "source":
+        if target in ("source", "src"):
             if udata.get("is_local_download"):
                 session_store.update_data(
                     user_id,
                     source_chat_id=picked.id,
                     source_chat_title=picked.title,
                     destination_chat_id=0,
-                    destination_chat_title="💾 Local Storage (/downloads/)",
+                    destination_chat_title="💾 Downloads Folder",
                     destination_thread_id=None,
                     topic_name=None,
                 )
@@ -693,12 +788,12 @@ class ChatPicker:
                 text=text, reply_markup=kb, parse_mode="Markdown"
             )
 
-        elif target == "dest":
+        elif target in ("dest", "dst"):
             if picked.id == 0:
                 session_store.update_data(
                     user_id,
                     destination_chat_id=0,
-                    destination_chat_title="💾 Local Storage (/downloads/)",
+                    destination_chat_title="💾 Downloads Folder",
                     destination_thread_id=None,
                     topic_name=None,
                 )

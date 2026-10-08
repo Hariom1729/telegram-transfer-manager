@@ -74,12 +74,16 @@ class Settings:
                 db_path = Path(db_part).parent
                 db_path.mkdir(parents=True, exist_ok=True)
         Path(cls.PROJECT_ROOT / "logs").mkdir(parents=True, exist_ok=True)
-        Path(cls.PROJECT_ROOT / "downloads").mkdir(parents=True, exist_ok=True)
+        from app.utils.paths import ensure_download_directory, get_temp_download_directory
+
+        ensure_download_directory()
+        get_temp_download_directory()
 
     @classmethod
     def run_startup_diagnostics(cls) -> None:
         """Log storage diagnostic information without logging secrets."""
         import logging
+        from app.utils.paths import get_download_directory, get_temp_download_directory
 
         diag_logger = logging.getLogger("app.diagnostics")
         cls.ensure_directories()
@@ -97,6 +101,11 @@ class Settings:
                 diag_logger.info("Session writable: %s", sf_writable)
         else:
             diag_logger.info("No existing .session files found in session directory.")
+
+        dl_dir = get_download_directory()
+        tmp_dir = get_temp_download_directory()
+        diag_logger.info("User Downloads directory: %s (writable: %s)", dl_dir, os.access(dl_dir, os.W_OK))
+        diag_logger.info("Temporary files directory: %s (writable: %s)", tmp_dir, os.access(tmp_dir, os.W_OK))
 
         if "sqlite" in cls.DATABASE_URL:
             db_part = cls.DATABASE_URL.split(":///")[-1]

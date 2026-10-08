@@ -2,9 +2,11 @@
 
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from difflib import SequenceMatcher
 import logging
 import time
 from typing import Any, Dict, List, Optional, Tuple
+import unicodedata
 from sqlalchemy import desc, select
 from telethon import TelegramClient, utils
 from telethon.errors import FloodWaitError
@@ -13,6 +15,14 @@ from app.database import get_session
 from app.models.chat import Chat
 
 logger = logging.getLogger(__name__)
+
+
+def _normalize_text(s: Optional[str]) -> str:
+    """Normalize string: Unicode NFKC, lowercased, and whitespace-collapsed."""
+    if not s:
+        return ""
+    norm = unicodedata.normalize("NFKC", str(s))
+    return " ".join(norm.strip().lower().split())
 
 
 @dataclass
@@ -36,11 +46,26 @@ class DiscoveredChat:
         """Icon representing the entity type."""
         if self.chat_type == "channel":
             return "📢"
-        elif self.chat_type in ("group", "supergroup"):
+        elif self.chat_type == "supergroup":
+            return "👥"
+        elif self.chat_type == "group":
             return "👥"
         elif self.chat_type == "private":
             return "💬"
         return "📁"
+
+    @property
+    def type_label(self) -> str:
+        """Human-readable chat type label."""
+        if self.chat_type == "channel":
+            return "Channel"
+        elif self.chat_type == "supergroup":
+            return "Supergroup"
+        elif self.chat_type == "group":
+            return "Group"
+        elif self.chat_type == "private":
+            return "Private Chat"
+        return "Chat"
 
 
 class ChatDiscovery:
@@ -214,53 +239,77 @@ class ChatDiscovery:
         return await cls.load_dialogs(account_id, client, force_refresh=True)
 
     @classmethod
-    def _rank_dialog(cls, chat: DiscoveredChat, query: str) -> Tuple[int, str]:
-        """Fuzzy-ish ranking for chat search matching specification.
-        
-        Priority:
-        0. Exact ID match
-        1. Title starts with query
-        2. Username starts with query
-        3. Word in title starts with query
-        4. Title contains query
-        5. Username contains query
+    def _rank_dialog(cls, chat: DiscoveredChat, query: str) -> Tuple[int, float, str]:
+        """Rank a chat for search suggestions according to strict priority tiers:
+        0. Exact numeric peer ID match
+        1. Exact title match
+        2. Exact username match
+        3. Title starts with query
+        4. Username starts with query
+        5. Any word in title starts with query
+        6. Title contains query
+        7. Username contains query
+        8. Fuzzy similarity (for queries >= 3 chars, ratio >= 0.55)
         999. No match
         """
-        q = query.strip().lower()
+        q = _normalize_text(query)
         if not q:
-            return (0, chat.title.lower())
+            return (0, 0.0, _normalize_text(chat.title))
 
-        # Exact numeric ID match
+        clean_q = q.lstrip("@").strip()
+        title_norm = _normalize_text(chat.title)
+        uname_norm = _normalize_text(chat.username).lstrip("@").strip() if chat.username else ""
+
+        # 0. Exact numeric peer ID match
         clean_num = q.lstrip("-")
         if str(chat.id) == q or str(abs(chat.id)) == clean_num:
-            return (0, chat.title.lower())
+            return (0, 0.0, title_norm)
 
-        title_lower = chat.title.lower()
-        uname_lower = chat.username.lower() if chat.username else ""
-        clean_q = q.lstrip("@")
+        # 1. Exact title match
+        if title_norm == q:
+            return (1, 0.0, title_norm)
 
-        # 1. Title starts with query
-        if title_lower.startswith(q):
-            return (1, title_lower)
+        # 2. Exact username match
+        if uname_norm and (uname_norm == clean_q or uname_norm == q):
+            return (2, 0.0, title_norm)
 
-        # 2. Username starts with query
-        if uname_lower and uname_lower.startswith(clean_q):
-            return (2, title_lower)
+        # 3. Title starts with query
+        if title_norm.startswith(q):
+            return (3, float(len(title_norm)), title_norm)
 
-        # 3. Any word in title starts with query
-        words = title_lower.split()
+        # 4. Username starts with query
+        if uname_norm and (uname_norm.startswith(clean_q) or uname_norm.startswith(q)):
+            return (4, float(len(uname_norm)), title_norm)
+
+        # 5. Any word in title starts with query
+        words = title_norm.split()
         if any(w.startswith(q) for w in words):
-            return (3, title_lower)
+            return (5, float(len(title_norm)), title_norm)
 
-        # 4. Title contains query
-        if q in title_lower:
-            return (4, title_lower)
+        # 6. Title contains query (partial match)
+        pos_title = title_norm.find(q)
+        if pos_title != -1:
+            return (6, float(pos_title), title_norm)
 
-        # 5. Username contains query
-        if uname_lower and clean_q in uname_lower:
-            return (5, title_lower)
+        # 7. Username contains query (partial match)
+        if clean_q and uname_norm:
+            pos_uname = uname_norm.find(clean_q)
+            if pos_uname != -1:
+                return (7, float(pos_uname), title_norm)
 
-        return (999, title_lower)
+        # 8. Fuzzy similarity (for queries with >= 3 characters)
+        if len(q) >= 3:
+            ratio_title = SequenceMatcher(None, q, title_norm).ratio()
+            ratio_uname = (
+                SequenceMatcher(None, clean_q, uname_norm).ratio()
+                if uname_norm
+                else 0.0
+            )
+            best_ratio = max(ratio_title, ratio_uname)
+            if best_ratio >= 0.55:
+                return (8, 1.0 - best_ratio, title_norm)
+
+        return (999, 0.0, title_norm)
 
     @classmethod
     async def search_dialogs(
@@ -292,15 +341,15 @@ class ChatDiscovery:
         if not q:
             return sorted(filtered, key=lambda c: c.title.lower())
 
-        ranked: List[Tuple[int, str, DiscoveredChat]] = []
+        ranked: List[Tuple[int, float, str, DiscoveredChat]] = []
         for chat in filtered:
-            score, sort_key = cls._rank_dialog(chat, q)
-            if score < 999:
-                ranked.append((score, sort_key, chat))
+            tier, secondary, sort_key = cls._rank_dialog(chat, q)
+            if tier < 999:
+                ranked.append((tier, secondary, sort_key, chat))
 
-        ranked.sort(key=lambda item: (item[0], item[1]))
+        ranked.sort(key=lambda item: (item[0], item[1], item[2]))
         if ranked:
-            return [item[2] for item in ranked]
+            return [item[3] for item in ranked]
 
         # If fuzzy search in cached dialogs yields no results, attempt direct entity lookup (e.g. @channel, t.me link, ID)
         if client and q:

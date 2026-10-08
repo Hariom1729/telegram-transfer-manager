@@ -19,6 +19,7 @@ from app.transfer.deduplication import DeduplicationService
 from app.transfer.progress import ProgressTracker
 from app.transfer.retry import NonRetryableTransferError, retry_executor
 from app.utils.formatting import format_duration
+from app.utils.paths import ensure_download_directory, sanitize_folder_name
 
 logger = logging.getLogger(__name__)
 
@@ -148,12 +149,9 @@ class TransferWorker:
         # 6. Pre-validation: Resolve destination entity and permissions
         if is_local_download:
             raw_title = job.source_chat_title or f"chat_{job.source_chat_id}"
-            safe_folder = "".join(
-                c for c in raw_title if c.isalnum() or c in (" ", "_", "-")
-            ).strip() or f"chat_{job.source_chat_id}"
-            local_dest_dir = Path("downloads") / safe_folder
-            local_dest_dir.mkdir(parents=True, exist_ok=True)
-            tracker.destination_title = f"Local Storage (`downloads/{safe_folder}/`)"
+            safe_folder = sanitize_folder_name(raw_title)
+            local_dest_dir = ensure_download_directory(safe_folder)
+            tracker.destination_title = f"Downloads/{safe_folder}/"
         else:
             try:
                 dest_entity = await client.get_entity(job.destination_chat_id)
