@@ -248,3 +248,43 @@ async def test_interrupted_jobs_recovery_on_startup():
         tm_module.get_session = original_get_session
         await engine.dispose()
 
+
+@pytest.mark.asyncio
+async def test_download_to_local_media_and_text(tmp_path):
+    """Verify download_to_local saves media and text messages properly."""
+    client = MagicMock()
+
+    # 1. Media message
+    media_file = tmp_path / "photo.jpg"
+    media_file.write_bytes(b"fake-image-bytes")
+
+    async def mock_download_media(msg, file):
+        return str(media_file)
+
+    client.download_media = mock_download_media
+
+    media_msg = MagicMock(spec=Message)
+    media_msg.id = 101
+    media_msg.media = MagicMock()
+    media_msg.message = "Beautiful Landscape"
+
+    out_dir = tmp_path / "downloads"
+    res = await MessageCopier.download_to_local(client, media_msg, out_dir)
+    assert res == str(media_file)
+    # Check caption file
+    caption_file = media_file.with_suffix(".jpg.caption.txt")
+    assert caption_file.exists()
+    assert caption_file.read_text(encoding="utf-8") == "Beautiful Landscape"
+
+    # 2. Text message
+    text_msg = MagicMock(spec=Message)
+    text_msg.id = 102
+    text_msg.media = None
+    text_msg.message = "Important notes here"
+
+    res_txt = await MessageCopier.download_to_local(client, text_msg, out_dir)
+    assert res_txt is not None
+    assert (out_dir / "msg_102.txt").exists()
+    assert (out_dir / "msg_102.txt").read_text(encoding="utf-8") == "Important notes here"
+
+

@@ -12,17 +12,18 @@ def build_main_menu_keyboard() -> InlineKeyboardMarkup:
     keyboard = [
         [
             InlineKeyboardButton("📥 New Transfer", callback_data="nav:new_transfer"),
+            InlineKeyboardButton("💾 Local Download", callback_data="nav:new_download"),
+        ],
+        [
             InlineKeyboardButton("📊 Active Transfers", callback_data="nav:active"),
-        ],
-        [
             InlineKeyboardButton("📋 Transfer History", callback_data="nav:history"),
+        ],
+        [
             InlineKeyboardButton("🔗 Connected Accounts", callback_data="nav:accounts"),
-        ],
-        [
             InlineKeyboardButton("🔄 Live Sync", callback_data="nav:live_sync"),
-            InlineKeyboardButton("⚙️ Settings", callback_data="nav:settings"),
         ],
         [
+            InlineKeyboardButton("⚙️ Settings", callback_data="nav:settings"),
             InlineKeyboardButton("ℹ️ Help", callback_data="nav:help"),
         ],
     ]
@@ -165,11 +166,12 @@ def build_topics_keyboard(
     ]
     if can_create:
         control_row.append(
-            InlineKeyboardButton("🆕 Create Topic", callback_data="topic:create")
+            InlineKeyboardButton("➕ Create Topic", callback_data="topic:create")
         )
     buttons.append(control_row)
     buttons.append(
         [
+            InlineKeyboardButton("🔄 Refresh Topics", callback_data="topic:refresh"),
             InlineKeyboardButton("⬅️ Back", callback_data="topic:back"),
             InlineKeyboardButton("❌ Cancel", callback_data="nav:cancel"),
         ]
@@ -232,13 +234,14 @@ def build_range_keyboard() -> InlineKeyboardMarkup:
     keyboard = [
         [
             InlineKeyboardButton("All Messages", callback_data="range:pick:all"),
+            InlineKeyboardButton("Last 50", callback_data="range:pick:50"),
+        ],
+        [
             InlineKeyboardButton("Last 100", callback_data="range:pick:100"),
-        ],
-        [
             InlineKeyboardButton("Last 500", callback_data="range:pick:500"),
-            InlineKeyboardButton("Last 1000", callback_data="range:pick:1000"),
         ],
         [
+            InlineKeyboardButton("Last 1000", callback_data="range:pick:1000"),
             InlineKeyboardButton("Custom Range (ID)", callback_data="range:pick:custom"),
         ],
         [

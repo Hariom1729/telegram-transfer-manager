@@ -295,6 +295,59 @@ async def handle_callback_query(
             )
         return
 
+    elif data == "nav:new_download":
+        accounts = await user_client_manager.list_user_accounts(user_id)
+        if not accounts:
+            text = (
+                "⚠️ *No Connected Telegram Accounts*\n\n"
+                "To download content to local storage, you must first connect your Telegram account."
+            )
+            kb = InlineKeyboardMarkup(
+                [
+                    [
+                        InlineKeyboardButton(
+                            "➕ Connect Account", callback_data="acc:connect"
+                        )
+                    ],
+                    [InlineKeyboardButton("🏠 Home", callback_data="nav:home")],
+                ]
+            )
+            await query.edit_message_text(
+                text=text, reply_markup=kb, parse_mode="Markdown"
+            )
+            return
+
+        session_store.clear(user_id)
+        session_store.update_data(
+            user_id,
+            is_local_download=True,
+            destination_chat_id=0,
+            destination_chat_title="💾 Local Storage (/downloads/)",
+        )
+        if len(accounts) == 1:
+            session_store.update_data(user_id, account_id=accounts[0].id)
+            await ChatPicker.show_source_picker(query, user_id)
+        else:
+            text = "👤 *Select Telegram Account* to use for this download:"
+            buttons = [
+                [
+                    InlineKeyboardButton(
+                        f"👤 {acc.first_name or acc.username or acc.phone_number}",
+                        callback_data=f"wizard:acc:{acc.id}",
+                    )
+                ]
+                for acc in accounts
+            ]
+            buttons.append(
+                [InlineKeyboardButton("❌ Cancel", callback_data="nav:cancel")]
+            )
+            await query.edit_message_text(
+                text=text,
+                reply_markup=InlineKeyboardMarkup(buttons),
+                parse_mode="Markdown",
+            )
+        return
+
     elif data.startswith("wizard:acc:"):
         acc_id = int(data.split(":")[-1])
         session_store.update_data(user_id, account_id=acc_id)
@@ -395,10 +448,16 @@ async def _handle_chat_picker_callback(query, user_id: int, data: str) -> None:
 
 
 async def _handle_topic_action(query, user_id: int, data: str) -> None:
-    """Handle forum topic selection."""
+    """Handle forum topic selection, creation, and refresh."""
+    udata = session_store.get_data(user_id)
+    account_id = udata.get("account_id")
+    dest_id = udata.get("destination_chat_id")
+    dest_title = udata.get("destination_chat_title", "Destination")
+    client = await user_client_manager.get_client_for_account(account_id)
+
     if data.startswith("topic:pick:"):
         topic_id = int(data.split(":")[-1])
-        topics = session_store.get_data(user_id).get("available_topics", [])
+        topics = udata.get("available_topics", [])
         topic_name = next(
             (t.title for t in topics if t.id == topic_id), f"Topic #{topic_id}"
         )
@@ -414,9 +473,56 @@ async def _handle_topic_action(query, user_id: int, data: str) -> None:
         await ChatPicker.show_destination_picker(query, user_id)
         return
 
+    if data == "topic:refresh":
+        if not client or not dest_id:
+            await query.answer("❌ Account or destination chat not found.", show_alert=True)
+            return
+
+        await query.answer("🔄 Refreshing topics from Telegram...")
+        topics = await TopicManager.get_topics(client, dest_id, force_refresh=True)
+        session_store.update_data(user_id, available_topics=topics)
+
+        text = (
+            f"✅ *Destination Selected*\n\n"
+            f"👥 *{dest_title}*\n\n"
+            "🧵 *This group has Topics enabled.*\n"
+            "Select a destination topic:"
+        )
+        await query.edit_message_text(
+            text=text,
+            reply_markup=build_topics_keyboard(topics),
+            parse_mode="Markdown",
+        )
+        return
+
     if data == "topic:create":
+        if not client or not dest_id:
+            await query.edit_message_text("❌ Account session unavailable.")
+            return
+
+        try:
+            entity = await client.get_entity(dest_id)
+            can_create, reason = TopicManager.check_topic_permissions(entity)
+            if not can_create:
+                if reason in ("NOT_A_SUPERGROUP", "NOT_A_FORUM"):
+                    err_text = "❌ *Topics aren't available in this destination.*"
+                else:
+                    err_text = "❌ *Your connected Telegram account cannot create topics here.*"
+                kb = InlineKeyboardMarkup(
+                    [[InlineKeyboardButton("⬅️ Back", callback_data="cp:dst:menu")]]
+                )
+                await query.edit_message_text(
+                    text=err_text, reply_markup=kb, parse_mode="Markdown"
+                )
+                return
+        except Exception as e:
+            logger.warning("Failed to check topic permissions: %s", e)
+
         session_store.set_state(user_id, BotState.WIZARD_TOPIC_CREATE)
-        text = "🆕 *Create New Topic*\n\nPlease send the title for the new topic:"
+        text = (
+            "🆕 *Create Topic*\n\n"
+            "Enter the topic name (e.g. `Python Course`):"
+        )
         kb = InlineKeyboardMarkup(
             [[InlineKeyboardButton("⬅️ Back", callback_data="cp:dst:menu")]]
         )
@@ -544,9 +650,12 @@ async def _show_transfer_preview(query, user_id: int) -> None:
     """Format and show Section 14 Preview."""
     udata = session_store.get_data(user_id)
     source_title = udata.get("source_chat_title", "Unknown")
+    dest_id = udata.get("destination_chat_id", 0)
     dest_title = udata.get("destination_chat_title", "Unknown")
+    is_local = (dest_id == 0) or ("Local Storage" in str(dest_title))
+    dest_icon = "💾" if is_local else "👥"
     topic_name = udata.get("topic_name")
-    topic_line = f"\nTOPIC\n🧵 {topic_name}\n" if topic_name else ""
+    topic_line = f"\nTOPIC\n🧵 {topic_name}\n" if (topic_name and not is_local) else ""
 
     c_types = udata.get("content_types", ["all"])
     content_str = "📦 Everything" if "all" in c_types else ", ".join(c_types)
@@ -564,10 +673,12 @@ async def _show_transfer_preview(query, user_id: int) -> None:
     dup_mode = udata.get("duplicate_mode", "skip")
     dup_str = "⏭ Skip existing" if dup_mode == "skip" else "🔄 Transfer again"
 
+    header = "💾 *Local Download Preview*" if is_local else "🚀 *Transfer Preview*"
+
     preview_text = (
-        "🚀 *Transfer Preview*\n\n"
+        f"{header}\n\n"
         f"SOURCE\n📢 {source_title}\n\n"
-        f"DESTINATION\n👥 {dest_title}\n"
+        f"DESTINATION\n{dest_icon} {dest_title}\n"
         f"{topic_line}\n"
         f"CONTENT\n{content_str}\n\n"
         f"RANGE\n{range_str}\n\n"
@@ -588,7 +699,7 @@ async def _handle_preview_action(query, user_id: int, data: str) -> None:
         account_id = udata.get("account_id")
         source_id = udata.get("source_chat_id")
         source_title = udata.get("source_chat_title")
-        dest_id = udata.get("destination_chat_id")
+        dest_id = udata.get("destination_chat_id", 0)
         dest_title = udata.get("destination_chat_title")
         dest_thread_id = udata.get("destination_thread_id")
         topic_name = udata.get("topic_name")
@@ -596,6 +707,7 @@ async def _handle_preview_action(query, user_id: int, data: str) -> None:
         dup_mode = udata.get("duplicate_mode", "skip")
         start_id = udata.get("start_message_id")
         end_id = udata.get("end_message_id")
+        r_limit = udata.get("range_limit")
 
         # Create job
         job = await transfer_manager.create_job(
@@ -611,7 +723,7 @@ async def _handle_preview_action(query, user_id: int, data: str) -> None:
             duplicate_mode=dup_mode,
             start_message_id=start_id,
             end_message_id=end_id,
-            total_messages=100,  # dynamic during scan
+            total_messages=r_limit if r_limit else 0,
         )
 
         chat_id = query.message.chat_id

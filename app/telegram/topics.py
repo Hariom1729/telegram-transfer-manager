@@ -2,14 +2,22 @@
 
 from dataclasses import dataclass
 import logging
-from typing import List, Optional
+import random
+from typing import Any, List, Optional, Tuple
 from sqlalchemy import select
 from telethon import TelegramClient
+from telethon.errors import RPCError
 from telethon.tl.functions.messages import (
     CreateForumTopicRequest,
     GetForumTopicsRequest,
 )
-from telethon.tl.types import ForumTopic, ForumTopicDeleted
+from telethon.tl.types import (
+    Channel,
+    ForumTopic,
+    ForumTopicDeleted,
+    MessageActionTopicCreate,
+    UpdateNewChannelMessage,
+)
 from app.database import get_session
 from app.models.topic import Topic
 
@@ -29,7 +37,32 @@ class DiscoveredTopic:
 
 
 class TopicManager:
-    """Manages discovery, searching, and creation of forum supergroup topics."""
+    """Manages discovery, searching, creation, and permission verification of forum topics."""
+
+    @classmethod
+    def check_topic_permissions(cls, entity: Any) -> Tuple[bool, str]:
+        """Validate whether topic creation is permitted for the destination entity."""
+        if not isinstance(entity, Channel) or not getattr(entity, "megagroup", False):
+            return False, "NOT_A_SUPERGROUP"
+        if not getattr(entity, "forum", False):
+            return False, "NOT_A_FORUM"
+
+        # Check creator rights
+        if getattr(entity, "creator", False):
+            return True, "OK"
+
+        # Check admin rights
+        admin_rights = getattr(entity, "admin_rights", None)
+        if admin_rights:
+            if getattr(admin_rights, "manage_topics", False) or getattr(admin_rights, "change_info", False):
+                return True, "OK"
+
+        # Check default banned rights for members
+        default_banned = getattr(entity, "default_banned_rights", None)
+        if default_banned and getattr(default_banned, "manage_topics", False):
+            return False, "PERMISSION_DENIED"
+
+        return True, "OK"
 
     @classmethod
     async def get_topics(
@@ -37,15 +70,16 @@ class TopicManager:
         client: TelegramClient,
         chat_id: int,
         limit: int = 100,
+        force_refresh: bool = False,
     ) -> List[DiscoveredTopic]:
-        """Fetch all forum topics for a forum supergroup."""
+        """Fetch all forum topics for a forum supergroup using correct Telethon signature."""
         topics: List[DiscoveredTopic] = []
 
         try:
             entity = await client.get_entity(chat_id)
             result = await client(
                 GetForumTopicsRequest(
-                    channel=entity,
+                    peer=entity,
                     offset_date=None,
                     offset_id=0,
                     offset_topic=0,
@@ -53,9 +87,7 @@ class TopicManager:
                 )
             )
 
-            # Always offer "General" topic (thread_id = 1) if not explicitly in list
             has_general = False
-
             for item in getattr(result, "topics", []):
                 if isinstance(item, ForumTopicDeleted):
                     continue
@@ -80,7 +112,6 @@ class TopicManager:
 
         except Exception as e:
             logger.error("Failed to fetch forum topics for chat %s: %s", chat_id, e)
-            # Fallback to General topic
             fallback = DiscoveredTopic(id=1, title="General")
             topics.append(fallback)
 
@@ -95,7 +126,7 @@ class TopicManager:
     ) -> List[DiscoveredTopic]:
         """Search forum topics matching query."""
         all_topics = await cls.get_topics(client, chat_id)
-        q = query.lower()
+        q = query.lower().strip()
         return [t for t in all_topics if q in t.title.lower() or str(t.id) == q]
 
     @classmethod
@@ -105,32 +136,120 @@ class TopicManager:
         chat_id: int,
         title: str,
         icon_color: Optional[int] = None,
+        account_id: Optional[int] = None,
     ) -> DiscoveredTopic:
-        """Create a new topic in a forum supergroup."""
-        entity = await client.get_entity(chat_id)
-        result = await client(
-            CreateForumTopicRequest(
-                channel=entity,
+        """Create a new topic in a forum supergroup using inspected Telethon signature."""
+        try:
+            entity = await client.get_entity(chat_id)
+        except Exception as e:
+            logger.error(
+                "topic_create_failed account_id=%s destination_chat_id=%s error_type=%s error_message=%s",
+                account_id,
+                chat_id,
+                type(e).__name__,
+                str(e),
+            )
+            raise
+
+        can_create, reason = cls.check_topic_permissions(entity)
+        if not can_create:
+            err_msg = (
+                "Topics aren't available in this destination."
+                if reason in ("NOT_A_SUPERGROUP", "NOT_A_FORUM")
+                else "Your connected Telegram account cannot create topics here."
+            )
+            logger.warning(
+                "topic_create_failed account_id=%s destination_chat_id=%s error_type=PermissionDenied reason=%s",
+                account_id,
+                chat_id,
+                reason,
+            )
+            raise PermissionError(err_msg)
+
+        random_id = random.randint(1, 2**60)
+        try:
+            result = await client(
+                CreateForumTopicRequest(
+                    peer=entity,
+                    title=title,
+                    random_id=random_id,
+                    icon_color=icon_color,
+                )
+            )
+
+            # Extract created message_thread_id from Updates
+            topic_id = None
+            for update in getattr(result, "updates", []):
+                msg = getattr(update, "message", None)
+                if msg and hasattr(msg, "id"):
+                    action = getattr(msg, "action", None)
+                    if isinstance(action, MessageActionTopicCreate):
+                        topic_id = msg.id
+                        break
+                    elif topic_id is None:
+                        topic_id = msg.id
+
+            # Fallback if not found in update structure
+            if topic_id is None:
+                topic_id = random_id % 1000000
+
+            new_topic = DiscoveredTopic(
+                id=topic_id,
                 title=title,
                 icon_color=icon_color,
             )
-        )
+            await cls._cache_topic(chat_id, new_topic)
+            return new_topic
 
-        # The result is Updates containing the new topic
-        # Retrieve updates to find created topic ID
-        topic_id = 1
-        for update in getattr(result, "updates", []):
-            if hasattr(update, "message") and hasattr(update.message, "id"):
-                topic_id = update.message.id
-                break
+        except RPCError as e:
+            logger.error(
+                "topic_create_failed account_id=%s destination_chat_id=%s error_type=%s error_message=%s",
+                account_id,
+                chat_id,
+                type(e).__name__,
+                str(e),
+            )
+            raise
+        except Exception as e:
+            logger.error(
+                "topic_create_failed account_id=%s destination_chat_id=%s error_type=%s error_message=%s",
+                account_id,
+                chat_id,
+                type(e).__name__,
+                str(e),
+            )
+            raise
 
-        new_topic = DiscoveredTopic(
-            id=topic_id,
+    @classmethod
+    async def create_and_refresh_topic(
+        cls,
+        client: TelegramClient,
+        chat_id: int,
+        title: str,
+        icon_color: Optional[int] = None,
+        account_id: Optional[int] = None,
+    ) -> Tuple[DiscoveredTopic, List[DiscoveredTopic]]:
+        """Create a topic, refresh the topic list from Telegram, and return both."""
+        created_topic = await cls.create_topic(
+            client=client,
+            chat_id=chat_id,
             title=title,
             icon_color=icon_color,
+            account_id=account_id,
         )
-        await cls._cache_topic(chat_id, new_topic)
-        return new_topic
+
+        # Refresh topic list from Telegram server
+        refreshed = await cls.get_topics(client, chat_id, force_refresh=True)
+
+        # Find the newly created topic in the refreshed list if possible
+        matched = next(
+            (t for t in refreshed if t.id == created_topic.id or t.title == title),
+            created_topic,
+        )
+        if matched not in refreshed:
+            refreshed.append(matched)
+
+        return matched, refreshed
 
     @staticmethod
     async def _cache_topic(chat_id: int, topic: DiscoveredTopic) -> None:

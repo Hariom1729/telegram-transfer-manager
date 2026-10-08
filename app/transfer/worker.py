@@ -88,10 +88,22 @@ class TransferWorker:
             )
             return
 
+        is_local_download = (job.destination_chat_id == 0)
+        local_dest_dir: Optional[Path] = None
+        dest_entity = None
+
         try:
             # Resolve entities
             source_entity = await client.get_entity(job.source_chat_id)
-            dest_entity = await client.get_entity(job.destination_chat_id)
+            if is_local_download:
+                raw_title = job.source_chat_title or f"chat_{job.source_chat_id}"
+                safe_folder = "".join(
+                    c for c in raw_title if c.isalnum() or c in (" ", "_", "-")
+                ).strip() or f"chat_{job.source_chat_id}"
+                local_dest_dir = Path("downloads") / safe_folder
+                local_dest_dir.mkdir(parents=True, exist_ok=True)
+            else:
+                dest_entity = await client.get_entity(job.destination_chat_id)
         except Exception as e:
             await self._fail_job(job_id, f"Failed to access source or destination: {e}")
             return
@@ -134,6 +146,8 @@ class TransferWorker:
             iter_kwargs["min_id"] = start_msg_id
         if end_msg_id and end_msg_id > 0:
             iter_kwargs["max_id"] = end_msg_id + 1
+        elif job.total_messages and job.total_messages > 0 and not start_msg_id:
+            iter_kwargs["limit"] = job.total_messages
 
         try:
             async for msg in client.iter_messages(**iter_kwargs):
@@ -188,14 +202,23 @@ class TransferWorker:
                         await tracker.update()
                         continue
 
-                # 5. Perform Transfer with Retry and FloodWait
-                async def do_copy():
-                    return await message_copier.copy_message(
-                        client=client,
-                        destination_entity=dest_entity,
-                        message=msg,
-                        destination_thread_id=job.destination_thread_id,
-                    )
+                # 5. Perform Transfer / Local Download with Retry and FloodWait
+                if is_local_download:
+                    async def do_copy():
+                        res = await message_copier.download_to_local(
+                            client=client,
+                            message=msg,
+                            download_dir=local_dest_dir,
+                        )
+                        return msg.id if res else 0
+                else:
+                    async def do_copy():
+                        return await message_copier.copy_message(
+                            client=client,
+                            destination_entity=dest_entity,
+                            message=msg,
+                            destination_thread_id=job.destination_thread_id,
+                        )
 
                 try:
                     dest_msg_id = await retry_executor.execute(
@@ -218,7 +241,7 @@ class TransferWorker:
                             )
                         tracker.successful_messages += 1
                         logger.info(
-                            "Message copied job=%s source_message=%s dest_message=%s",
+                            "Message processed job=%s source_message=%s dest_message=%s",
                             job.id,
                             msg.id,
                             dest_msg_id,

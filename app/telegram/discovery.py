@@ -1,10 +1,10 @@
-"""Chat and Channel Discovery via MTProto with In-Memory Caching and Fuzzy Search."""
+"""Chat and Channel Discovery via MTProto with In-Memory Caching, Refresh, and Fuzzy Search."""
 
 from dataclasses import dataclass
 from datetime import datetime, timezone
 import logging
 import time
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 from sqlalchemy import desc, select
 from telethon import TelegramClient, utils
 from telethon.errors import FloodWaitError
@@ -17,7 +17,7 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class DiscoveredChat:
-    """Standardized representation of an accessible Telegram chat."""
+    """Standardized representation of an accessible Telegram chat with entity references."""
 
     id: int  # Full Telegram peer ID (-100... for channels/supergroups, positive for users)
     title: str
@@ -28,6 +28,8 @@ class DiscoveredChat:
     can_post: bool = True
     can_manage_topics: bool = False
     db_id: Optional[int] = None
+    entity: Any = None
+    input_entity: Any = None
 
     @property
     def display_icon(self) -> str:
@@ -42,17 +44,17 @@ class DiscoveredChat:
 
 
 class ChatDiscovery:
-    """Discovers and caches accessible channels, groups, and chats for authenticated accounts."""
+    """Discovers, caches, and refreshes accessible channels, groups, and chats for authenticated accounts."""
 
-    CACHE_TTL_SECONDS: int = 600  # 10 minutes cache TTL
+    CACHE_TTL_SECONDS: int = 600  # 10 minutes default cache TTL
 
     # In-memory dialog cache per telegram_account_id
     _dialog_cache: Dict[int, List[DiscoveredChat]] = {}
     _cache_timestamps: Dict[int, float] = {}
 
     @classmethod
-    def _classify_entity(cls, entity) -> DiscoveredChat:
-        """Classify a Telethon entity into DiscoveredChat."""
+    def _classify_entity(cls, entity: Any, dialog: Any = None) -> DiscoveredChat:
+        """Classify a Telethon entity into DiscoveredChat and retain entity references."""
         is_megagroup = False
         is_forum = False
         can_post = True
@@ -69,6 +71,8 @@ class ChatDiscovery:
             else:
                 peer_id = raw_id
 
+        input_ent = getattr(dialog, "input_entity", None) if dialog else None
+
         if isinstance(entity, Channel):
             username = getattr(entity, "username", None)
             title = getattr(entity, "title", "Unnamed Channel")
@@ -77,11 +81,20 @@ class ChatDiscovery:
             chat_type = "supergroup" if is_megagroup else "channel"
 
             admin_rights = getattr(entity, "admin_rights", None)
-            if admin_rights:
-                can_manage_topics = bool(getattr(admin_rights, "manage_topics", False))
+            default_banned = getattr(entity, "default_banned_rights", None)
+
+            if getattr(entity, "creator", False):
+                can_manage_topics = True
+                can_post = True
+            elif admin_rights:
+                can_manage_topics = bool(getattr(admin_rights, "manage_topics", False) or getattr(admin_rights, "change_info", False))
                 can_post = bool(getattr(admin_rights, "post_messages", True))
+            elif default_banned and getattr(default_banned, "manage_topics", False):
+                can_manage_topics = False
+                can_post = not bool(getattr(default_banned, "send_messages", False))
             else:
-                can_manage_topics = bool(getattr(entity, "creator", False))
+                can_manage_topics = True
+                can_post = True
 
             return DiscoveredChat(
                 id=peer_id,
@@ -92,6 +105,8 @@ class ChatDiscovery:
                 is_forum=is_forum,
                 can_post=can_post,
                 can_manage_topics=can_manage_topics,
+                entity=entity,
+                input_entity=input_ent,
             )
 
         elif isinstance(entity, TgChat):
@@ -104,6 +119,8 @@ class ChatDiscovery:
                 is_forum=False,
                 can_post=True,
                 can_manage_topics=False,
+                entity=entity,
+                input_entity=input_ent,
             )
 
         elif isinstance(entity, TgUser):
@@ -122,6 +139,8 @@ class ChatDiscovery:
                 is_forum=False,
                 can_post=True,
                 can_manage_topics=False,
+                entity=entity,
+                input_entity=input_ent,
             )
 
         entity_id = getattr(entity, "id", 0)
@@ -131,6 +150,8 @@ class ChatDiscovery:
             chat_type="group",
             is_megagroup=False,
             is_forum=False,
+            entity=entity,
+            input_entity=input_ent,
         )
 
     @classmethod
@@ -139,7 +160,7 @@ class ChatDiscovery:
         account_id: int,
         client: TelegramClient,
         force_refresh: bool = False,
-        limit: int = 200,
+        limit: int = 300,
     ) -> List[DiscoveredChat]:
         """Load dialogs for an account, using in-memory cache if fresh."""
         now = time.time()
@@ -160,10 +181,9 @@ class ChatDiscovery:
         try:
             async for dialog in client.iter_dialogs(limit=limit):
                 entity = dialog.entity
-                # Skip deactivated or empty entities
                 if getattr(entity, "deactivated", False):
                     continue
-                chat_info = cls._classify_entity(entity)
+                chat_info = cls._classify_entity(entity, dialog=dialog)
                 chats.append(chat_info)
 
             # Store in in-memory cache
@@ -189,12 +209,13 @@ class ChatDiscovery:
     async def refresh_dialogs(
         cls, account_id: int, client: TelegramClient
     ) -> List[DiscoveredChat]:
-        """Explicitly refresh dialogs from Telethon and update cache."""
+        """Explicitly refresh dialogs from Telethon, replace cache, and sync to database."""
+        logger.info("Explicitly refreshing dialogs for account %s", account_id)
         return await cls.load_dialogs(account_id, client, force_refresh=True)
 
     @classmethod
     def _rank_dialog(cls, chat: DiscoveredChat, query: str) -> Tuple[int, str]:
-        """Fuzzy-ish ranking for chat search matching Section 14 specification.
+        """Fuzzy-ish ranking for chat search matching specification.
         
         Priority:
         0. Exact ID match
@@ -295,7 +316,6 @@ class ChatDiscovery:
                     .limit(limit)
                 )
                 if account_id:
-                    # Prefer chats belonging to this account if available
                     acc_query = query.where(Chat.telegram_account_id == account_id)
                     res = await session.execute(acc_query)
                     rows = res.scalars().all()

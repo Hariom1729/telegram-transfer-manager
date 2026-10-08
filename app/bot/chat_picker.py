@@ -48,11 +48,22 @@ class ChatPicker:
                 InlineKeyboardButton("📋 Recent", callback_data=f"{prefix}:recent"),
                 InlineKeyboardButton("🔄 Refresh Chats", callback_data=f"{prefix}:refresh"),
             ],
+        ]
+        if code == "dst":
+            keyboard.append(
+                [
+                    InlineKeyboardButton(
+                        "💾 Save to Local Storage (Folder)",
+                        callback_data="cp:dst:pk:0",
+                    )
+                ]
+            )
+        keyboard.append(
             [
                 back_btn,
                 InlineKeyboardButton("❌ Cancel", callback_data="nav:cancel"),
-            ],
-        ]
+            ]
+        )
         return InlineKeyboardMarkup(keyboard)
 
     @staticmethod
@@ -539,17 +550,41 @@ class ChatPicker:
             picked = next((c for c in cached if c.id == chat_id), None)
 
         if not picked:
-            # Fallback representation
-            picked = DiscoveredChat(
-                id=chat_id,
-                title=str(chat_id),
-                chat_type="chat",
-            )
+            if chat_id == 0:
+                picked = DiscoveredChat(
+                    id=0,
+                    title="💾 Local Storage (/downloads/)",
+                    chat_type="private",
+                    display_icon="💾",
+                )
+            else:
+                # Fallback representation
+                picked = DiscoveredChat(
+                    id=chat_id,
+                    title=str(chat_id),
+                    chat_type="chat",
+                )
 
-        # Record recent selection in database
-        await ChatDiscovery.record_chat_selection(account_id, picked)
+        # Record recent selection in database (only for valid non-zero chats)
+        if picked.id != 0:
+            await ChatDiscovery.record_chat_selection(account_id, picked)
 
         if target == "source":
+            if udata.get("is_local_download"):
+                session_store.update_data(
+                    user_id,
+                    source_chat_id=picked.id,
+                    source_chat_title=picked.title,
+                    destination_chat_id=0,
+                    destination_chat_title="💾 Local Storage (/downloads/)",
+                    destination_thread_id=None,
+                    topic_name=None,
+                )
+                from app.bot.callbacks import _show_content_filter
+
+                await _show_content_filter(query, user_id)
+                return
+
             session_store.update_data(
                 user_id,
                 source_chat_id=picked.id,
@@ -582,6 +617,19 @@ class ChatPicker:
             )
 
         elif target == "dest":
+            if picked.id == 0:
+                session_store.update_data(
+                    user_id,
+                    destination_chat_id=0,
+                    destination_chat_title="💾 Local Storage (/downloads/)",
+                    destination_thread_id=None,
+                    topic_name=None,
+                )
+                from app.bot.callbacks import _show_content_filter
+
+                await _show_content_filter(query, user_id)
+                return
+
             session_store.update_data(
                 user_id,
                 destination_chat_id=picked.id,

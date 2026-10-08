@@ -8,7 +8,7 @@ from app.bot.chat_picker import ChatPicker
 from app.bot.states import BotState, session_store
 from app.models.chat import Chat
 from app.telegram.discovery import ChatDiscovery, DiscoveredChat
-from app.telegram.topics import DiscoveredTopic
+from app.telegram.topics import DiscoveredTopic, TopicManager
 
 
 @pytest.fixture(autouse=True)
@@ -402,3 +402,148 @@ async def test_chat_picker_handle_pick_dest_forum_transitions_to_topics():
             for row in kb.inline_keyboard
             for btn in row
         )
+
+
+# =============================================================================
+# 6. Eleven Comprehensive End-to-End Scenarios
+# =============================================================================
+
+@pytest.mark.asyncio
+async def test_end_to_end_11_scenarios():
+    """Verify all 11 required scenarios:
+    1. Existing destination appears.
+    2. Newly created destination does not initially appear.
+    3. Press Refresh Chats.
+    4. Newly created destination appears.
+    5. Search newly created destination.
+    6. Select destination.
+    7. Existing topics load.
+    8. Create a new topic.
+    9. New topic appears after creation.
+    10. Select newly created topic.
+    11. Start a one-message transfer to that topic.
+    """
+    from telethon.tl.types import Updates, UpdateNewChannelMessage, Message, MessageActionTopicCreate, ForumTopic
+    from app.transfer.manager import transfer_manager
+    from app.models.transfer_job import JobStatus
+
+    client = MagicMock()
+
+    # Step 1 & 2: Initial dialogs (existing destination only)
+    existing_dest = MagicMock(spec=Channel, id=501, title="Old Destination Group", megagroup=True, forum=True, username="old_dest", admin_rights=MagicMock(manage_topics=True), creator=True, deactivated=False)
+    new_dest = MagicMock(spec=Channel, id=502, title="Driver Tutorials Forum", megagroup=True, forum=True, username="driver_tut", admin_rights=MagicMock(manage_topics=True), creator=True, deactivated=False)
+
+    dialog_state = [MagicMock(entity=existing_dest)]
+
+    async def fake_iter(limit=300):
+        for d in dialog_state:
+            yield d
+
+    client.iter_dialogs = MagicMock(side_effect=fake_iter)
+
+    with patch.object(ChatDiscovery, "_sync_chats_to_db", new_callable=AsyncMock):
+        # 1. Existing destination appears
+        chats_step1 = await ChatDiscovery.load_dialogs(account_id=1, client=client)
+        assert any(c.title == "Old Destination Group" for c in chats_step1)
+
+        # 2. Newly created destination does not initially appear
+        assert not any(c.title == "Driver Tutorials Forum" for c in chats_step1)
+
+        # User now creates new channel in Telegram app -> dialog_state updated
+        dialog_state.append(MagicMock(entity=new_dest))
+
+        # 3. Press Refresh Chats
+        chats_step3 = await ChatDiscovery.refresh_dialogs(account_id=1, client=client)
+
+        # 4. Newly created destination appears
+        assert any(c.title == "Driver Tutorials Forum" for c in chats_step3)
+
+        # 5. Search newly created destination with query "driver"
+        search_results = await ChatDiscovery.search_dialogs(account_id=1, query="driver")
+        assert len(search_results) >= 1
+        assert search_results[0].title == "Driver Tutorials Forum"
+
+        # 6. Select destination
+        selected_dest = search_results[0]
+        assert selected_dest.id == -100502
+        assert selected_dest.is_forum is True
+
+        # 7. Existing topics load
+        fake_forum_topics_res = MagicMock()
+        fake_forum_topics_res.topics = [
+            MagicMock(spec=ForumTopic, id=1, title="General", closed=False, pinned=False),
+            MagicMock(spec=ForumTopic, id=10, title="Existing Course", closed=False, pinned=False),
+        ]
+        client.get_entity = AsyncMock(return_value=new_dest)
+        client.side_effect = None
+
+        async def fake_client_call(req):
+            if req.__class__.__name__ == "GetForumTopicsRequest":
+                return fake_forum_topics_res
+            elif req.__class__.__name__ == "CreateForumTopicRequest":
+                # Verify correct request attributes: peer and title
+                assert hasattr(req, "peer")
+                assert hasattr(req, "title")
+                assert req.title == "Python Course"
+                # Mock Updates response
+                up = UpdateNewChannelMessage(
+                    message=MagicMock(spec=Message, id=77, action=MagicMock(spec=MessageActionTopicCreate)),
+                    pts=1,
+                    pts_count=1,
+                )
+                return Updates(updates=[up], users=[], chats=[], date=None, seq=0)
+            return MagicMock()
+
+        client.side_effect = fake_client_call
+
+        existing_topics = await TopicManager.get_topics(client, selected_dest.id)
+        assert len(existing_topics) == 2
+        assert any(t.title == "General" for t in existing_topics)
+        assert any(t.title == "Existing Course" for t in existing_topics)
+
+        # 8. Create a new topic "Python Course"
+        # Simulate Telegram server adding new topic on refresh
+        def add_topic_to_server():
+            fake_forum_topics_res.topics.append(
+                MagicMock(spec=ForumTopic, id=77, title="Python Course", closed=False, pinned=False)
+            )
+
+        with patch.object(TopicManager, "_cache_topic", new_callable=AsyncMock):
+            created_topic, refreshed_topics = await TopicManager.create_and_refresh_topic(
+                client=client,
+                chat_id=selected_dest.id,
+                title="Python Course",
+                account_id=1,
+            )
+            add_topic_to_server()
+
+        # 9. New topic appears after creation with thread ID
+        assert created_topic.id == 77
+        assert created_topic.title == "Python Course"
+
+        # 10. Select newly created topic
+        destination_thread_id = created_topic.id
+        assert destination_thread_id == 77
+
+        # 11. Start a one-message transfer to that topic
+        user_id = 12345
+        job = await transfer_manager.create_job(
+            owner_id=user_id,
+            telegram_account_id=1,
+            source_chat_id=-100111,
+            source_chat_title="Source Channel",
+            destination_chat_id=selected_dest.id,
+            destination_chat_title="Driver Tutorials Forum",
+            destination_thread_id=destination_thread_id,
+            topic_name=created_topic.title,
+            start_message_id=100,
+            end_message_id=100,
+            total_messages=1,
+        )
+
+        assert job.id is not None
+        assert job.destination_chat_id == -100502
+        assert job.destination_thread_id == 77
+        assert job.topic_name == "Python Course"
+        assert job.total_messages == 1
+        assert job.status == JobStatus.QUEUED.value

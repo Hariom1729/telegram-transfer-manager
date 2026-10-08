@@ -1,7 +1,10 @@
 """Message Copier and Content Filter Service."""
 
 import logging
+import os
+from pathlib import Path
 from typing import List, Optional
+import uuid
 from telethon import TelegramClient
 from telethon.tl.custom.message import Message
 from telethon.tl.types import (
@@ -152,23 +155,88 @@ class MessageCopier:
             )
 
         # 4. Final fallback for channels with strict restrictions:
-        # Download media to memory/disk and re-upload
-        downloaded_bytes = await client.download_media(message, file=bytes)
-        if downloaded_bytes:
-            filename = getattr(message.file, "name", "file")
-            sent = await client.send_file(
-                entity=destination_entity,
-                file=downloaded_bytes,
-                caption=caption,
-                reply_to=reply_to,
-                attributes=getattr(message.document, "attributes", None),
-            )
-            return sent.id
+        # Stream download media to temporary disk file to protect low RAM servers (e.g. 1GB/2GB AWS)
+        # and delete immediately after upload
+        temp_dir = Path("data/temp")
+        temp_dir.mkdir(parents=True, exist_ok=True)
+        temp_path = temp_dir / f"stream_{message.chat_id}_{message.id}_{uuid.uuid4().hex[:8]}"
+        downloaded_path = None
+        try:
+            downloaded_path = await client.download_media(message, file=str(temp_path))
+            if downloaded_path and os.path.exists(downloaded_path):
+                sent = await client.send_file(
+                    entity=destination_entity,
+                    file=downloaded_path,
+                    caption=caption,
+                    formatting_entities=message.entities,
+                    reply_to=reply_to,
+                    attributes=getattr(message.document, "attributes", None),
+                )
+                return sent.id
+        finally:
+            if os.path.exists(temp_path):
+                try:
+                    os.remove(temp_path)
+                except Exception:
+                    pass
+            if downloaded_path and os.path.exists(downloaded_path):
+                try:
+                    os.remove(downloaded_path)
+                except Exception:
+                    pass
 
         raise RuntimeError(
             f"Unable to transfer message {message.id}: unsupported or inaccessible media."
         )
 
+    @classmethod
+    async def download_to_local(
+        cls,
+        client: TelegramClient,
+        message: Message,
+        download_dir: Path,
+    ) -> Optional[str]:
+        """Download message media or text directly to a local directory.
+
+        Supports restricted/copy-protected channels (noforwards) and all media types.
+        """
+        download_dir.mkdir(parents=True, exist_ok=True)
+
+        # 1. Media message (Photo, Video, Audio, Document, Voice, Animation)
+        if message.media:
+            try:
+                # Telethon's download_media handles streaming from MTProto even on restricted channels
+                downloaded_path = await client.download_media(
+                    message, file=str(download_dir)
+                )
+                if downloaded_path:
+                    # If there's an accompanying caption, write it to a companion .caption.txt file
+                    caption = (message.message or "").strip()
+                    if caption:
+                        caption_file = Path(downloaded_path).with_suffix(
+                            Path(downloaded_path).suffix + ".caption.txt"
+                        )
+                        try:
+                            caption_file.write_text(caption, encoding="utf-8")
+                        except Exception as ce:
+                            logger.debug("Could not write caption file: %s", ce)
+                    return str(downloaded_path)
+            except Exception as e:
+                logger.error(
+                    "Failed to download media for message %s: %s", message.id, e
+                )
+                raise
+
+        # 2. Text-only message
+        text_content = (message.message or "").strip()
+        if text_content:
+            txt_path = download_dir / f"msg_{message.id}.txt"
+            txt_path.write_text(text_content, encoding="utf-8")
+            return str(txt_path)
+
+        return None
+
 
 message_copier = MessageCopier()
+
 

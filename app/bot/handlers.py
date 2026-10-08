@@ -301,25 +301,54 @@ async def text_message_handler(
         account_id = udata.get("account_id")
         dest_id = udata.get("destination_chat_id")
         client = await user_client_manager.get_client_for_account(account_id)
+        if not client:
+            await message.reply_text("❌ Telegram account session is disconnected.")
+            return
+
+        status_msg = await message.reply_text(f"⏳ Creating topic '{text}'...")
         try:
-            new_topic = await TopicManager.create_topic(
+            new_topic, refreshed_topics = await TopicManager.create_and_refresh_topic(
                 client=client,
                 chat_id=dest_id,
                 title=text,
+                account_id=account_id,
             )
             session_store.update_data(
                 user_id,
                 destination_thread_id=new_topic.id,
                 topic_name=new_topic.title,
+                available_topics=refreshed_topics,
             )
-            await message.reply_text(
-                f"✅ Created topic: 🧵 *{new_topic.title}*\n\n"
-                "Now choose duplicate handling:",
-                reply_markup=build_duplicate_mode_keyboard("skip"),
+            session_store.set_state(user_id, BotState.WIZARD_TOPIC_SELECT)
+
+            success_text = (
+                f"✅ *Topic Created Successfully!*\n\n"
+                f"🧵 *{new_topic.title}* (`ID: {new_topic.id}`)\n\n"
+                "Select a destination topic below to continue:"
+            )
+            await status_msg.edit_text(
+                text=success_text,
+                reply_markup=build_topics_keyboard(refreshed_topics),
                 parse_mode="Markdown",
             )
         except Exception as e:
-            await message.reply_text(f"❌ Could not create topic: {e}")
+            err_str = str(e)
+            if "Topics aren't available" in err_str or "cannot create topics" in err_str:
+                safe_err = err_str
+            else:
+                safe_err = "Telegram returned an error or rate limit while creating topic."
+
+            kb = InlineKeyboardMarkup(
+                [
+                    [InlineKeyboardButton("🔄 Try Again", callback_data="topic:create")],
+                    [InlineKeyboardButton("⬅️ Back", callback_data="topic:back")],
+                ]
+            )
+            await status_msg.edit_text(
+                text=f"❌ *Could not create the topic.*\n\nTelegram returned:\n_{safe_err}_",
+                reply_markup=kb,
+                parse_mode="Markdown",
+            )
         return
 
     # 7. Custom Range Input
