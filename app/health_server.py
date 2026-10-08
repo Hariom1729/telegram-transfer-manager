@@ -192,7 +192,7 @@ async def start_health_server(host: str = "0.0.0.0", port: Optional[int] = None)
     """Start the background HTTP server for Hugging Face Spaces."""
     global _server
     if port is None:
-        port = int(os.getenv("PORT", os.getenv("HEALTH_PORT", "7860")))
+        port = int(os.getenv("PORT", os.getenv("HEALTH_PORT", "10000")))
 
     try:
         _server = await asyncio.start_server(_handle_http_request, host, port)

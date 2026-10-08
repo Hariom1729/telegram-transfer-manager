@@ -2,7 +2,8 @@ FROM python:3.12-slim
 
 # Prevent Python from writing .pyc and buffer outputs
 ENV PYTHONDONTWRITEBYTECODE=1 \
-    PYTHONUNBUFFERED=1
+    PYTHONUNBUFFERED=1 \
+    PORT=10000
 
 WORKDIR /app
 
