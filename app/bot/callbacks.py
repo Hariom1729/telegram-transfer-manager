@@ -83,6 +83,11 @@ async def handle_callback_query(
         )
         return
 
+    elif data == "nav:settings":
+        from app.bot.commands import cmd_settings
+        await cmd_settings(update, context)
+        return
+
     elif data == "nav:cancel":
         was_in_auth = session_store.get_state(user_id) in (
             BotState.AUTH_WAITING_PHONE,

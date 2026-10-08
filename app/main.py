@@ -5,6 +5,7 @@ import logging
 import signal
 import sys
 from telegram.ext import Application
+from app.bot.commands import setup_bot_commands
 from app.bot.handlers import register_handlers
 from app.config import settings
 from app.database import close_db, init_db
@@ -76,6 +77,7 @@ async def main() -> None:
 
     # Start bot
     await application.initialize()
+    await setup_bot_commands(application)
     await application.start()
     await application.updater.start_polling(drop_pending_updates=True)
     logger.info("Telegram Transfer Manager is now LIVE and polling for updates.")

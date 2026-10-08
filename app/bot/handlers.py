@@ -12,6 +12,10 @@ from telegram.ext import (
 )
 from app.bot.callbacks import handle_callback_query
 from app.bot.chat_picker import ChatPicker
+from app.bot.commands import (
+    cmd_unknown,
+    register_command_handlers,
+)
 from app.bot.keyboards import (
     build_auth_2fa_keyboard,
     build_auth_code_keyboard,
@@ -664,9 +668,13 @@ async def download_benchmark_command(
 
 def register_handlers(app: Application) -> None:
     """Register all bot command, callback, and message handlers with python-telegram-bot."""
-    app.add_handler(CommandHandler("start", start_command))
-    app.add_handler(CommandHandler("cancel", cancel_command))
+    # 1. Register all slash commands and command callbacks
+    register_command_handlers(app)
+
+    # 2. Legacy admin benchmark command
     app.add_handler(CommandHandler("download_benchmark", download_benchmark_command))
+
+    # 3. Callback handlers for direct send & navigation
     app.add_handler(
         CallbackQueryHandler(handle_direct_send_callback, pattern=r"^direct_send:")
     )
@@ -675,7 +683,7 @@ def register_handlers(app: Application) -> None:
     )
     app.add_handler(CallbackQueryHandler(handle_callback_query))
 
-    # Media messages for direct file sending
+    # 4. Media messages for direct file sending
     app.add_handler(
         MessageHandler(
             filters.PHOTO
@@ -688,8 +696,13 @@ def register_handlers(app: Application) -> None:
         )
     )
 
-    # General text messages
+    # 5. General text messages (non-commands)
     app.add_handler(
         MessageHandler(filters.TEXT & ~filters.COMMAND, text_message_handler)
+    )
+
+    # 6. Fall-through unknown command handler
+    app.add_handler(
+        MessageHandler(filters.COMMAND, cmd_unknown)
     )
 
