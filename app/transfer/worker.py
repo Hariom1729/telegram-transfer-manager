@@ -3,6 +3,7 @@
 import asyncio
 from datetime import datetime, timezone
 import logging
+from pathlib import Path
 import time
 from typing import Callable, Coroutine, Dict, List, Optional
 from sqlalchemy import select
@@ -143,7 +144,7 @@ class TransferWorker:
             "reverse": True,
         }
         if start_msg_id and start_msg_id > 0:
-            iter_kwargs["min_id"] = start_msg_id
+            iter_kwargs["min_id"] = max(0, start_msg_id - 1)
         if end_msg_id and end_msg_id > 0:
             iter_kwargs["max_id"] = end_msg_id + 1
         elif job.total_messages and job.total_messages > 0 and not start_msg_id:
@@ -203,20 +204,21 @@ class TransferWorker:
                         continue
 
                 # 5. Perform Transfer / Local Download with Retry and FloodWait
+                cur_msg = msg
                 if is_local_download:
-                    async def do_copy():
+                    async def do_copy(m=cur_msg):
                         res = await message_copier.download_to_local(
                             client=client,
-                            message=msg,
+                            message=m,
                             download_dir=local_dest_dir,
                         )
-                        return msg.id if res else 0
+                        return m.id if res else 0
                 else:
-                    async def do_copy():
+                    async def do_copy(m=cur_msg):
                         return await message_copier.copy_message(
                             client=client,
                             destination_entity=dest_entity,
-                            message=msg,
+                            message=m,
                             destination_thread_id=job.destination_thread_id,
                         )
 
