@@ -43,6 +43,16 @@ class Settings:
     elif _raw_db_url.startswith("postgresql://") and not _raw_db_url.startswith("postgresql+"):
         _raw_db_url = _raw_db_url.replace("postgresql://", "postgresql+asyncpg://", 1)
 
+    # Auto-encode special characters in password (such as # or $) if present
+    if "://" in _raw_db_url and "@" in _raw_db_url:
+        import urllib.parse
+        prefix, rest = _raw_db_url.split("://", 1)
+        userinfo, hostinfo = rest.rsplit("@", 1)
+        if ":" in userinfo:
+            user, pwd = userinfo.split(":", 1)
+            encoded_pwd = urllib.parse.quote_plus(urllib.parse.unquote_plus(pwd))
+            _raw_db_url = f"{prefix}://{user}:{encoded_pwd}@{hostinfo}"
+
     if _raw_db_url.startswith("sqlite+aiosqlite:///./") or _raw_db_url.startswith("sqlite+aiosqlite://./"):
         _rel_db_path = _raw_db_url.split("sqlite+aiosqlite:///")[-1].lstrip("./")
         DATABASE_URL: str = f"sqlite+aiosqlite:///{PROJECT_ROOT / _rel_db_path}"
