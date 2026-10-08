@@ -537,11 +537,21 @@ async def _show_content_filter(query, user_id: int) -> None:
     data = session_store.get_data(user_id)
     selected_types = data.get("content_types", ["all"])
     session_store.update_data(user_id, content_types=selected_types)
-    text = (
-        "⚙️ *Transfer Settings — Content*\n\n"
-        "Select what types of content to transfer:\n"
-        "(Default: Everything)"
-    )
+
+    is_local = (data.get("destination_chat_id", 0) == 0) or bool(data.get("is_local_download"))
+    if is_local:
+        text = (
+            "💾 *Local Download — Content Filter*\n\n"
+            "Select what file types to save to your local folder:\n"
+            "(Default: Everything)"
+        )
+    else:
+        text = (
+            "⚙️ *Transfer Settings — Content*\n\n"
+            "Select what types of content to transfer:\n"
+            "(Default: Everything)"
+        )
+
     await query.edit_message_text(
         text=text,
         reply_markup=build_content_filters_keyboard(selected_types),
@@ -576,10 +586,17 @@ async def _handle_content_action(query, user_id: int, data: str) -> None:
 
     if data == "content:done":
         # Show range selection
-        text = (
-            "📅 *Transfer Settings — Message Range*\n\n"
-            "Choose which messages to transfer:"
-        )
+        is_local = (user_data.get("destination_chat_id", 0) == 0) or bool(user_data.get("is_local_download"))
+        if is_local:
+            text = (
+                "💾 *Local Download — Quantity & Range*\n\n"
+                "Choose how many files/messages to download to local disk:"
+            )
+        else:
+            text = (
+                "📅 *Transfer Settings — Message Range*\n\n"
+                "Choose which messages to transfer:"
+            )
         await query.edit_message_text(
             text=text,
             reply_markup=build_range_keyboard(),
@@ -590,6 +607,9 @@ async def _handle_content_action(query, user_id: int, data: str) -> None:
 
 async def _handle_range_action(query, user_id: int, data: str) -> None:
     """Handle range selection."""
+    udata = session_store.get_data(user_id)
+    is_local = (udata.get("destination_chat_id", 0) == 0) or bool(udata.get("is_local_download"))
+
     if data.startswith("range:pick:"):
         r_type = data.split(":")[-1]
         if r_type == "custom":
@@ -597,7 +617,7 @@ async def _handle_range_action(query, user_id: int, data: str) -> None:
             text = (
                 "🔢 *Enter Message ID Range*\n\n"
                 "Send start and end IDs separated by space or hyphen.\n"
-                "Example: `1 155` or `1-155`"
+                "Example: `1 50` or `1-50`"
             )
             kb = InlineKeyboardMarkup(
                 [[InlineKeyboardButton("⬅️ Back", callback_data="content:done")]]
@@ -607,7 +627,7 @@ async def _handle_range_action(query, user_id: int, data: str) -> None:
             )
             return
 
-        # Numeric limits: 100, 500, 1000 or all
+        # Numeric limits: 50, 100, 500, 1000 or all
         limit = None if r_type == "all" else int(r_type)
         session_store.update_data(
             user_id,
@@ -618,10 +638,16 @@ async def _handle_range_action(query, user_id: int, data: str) -> None:
         )
 
         # Move to Duplicate handling
-        text = (
-            "🔁 *Transfer Settings — Duplicate Handling*\n\n"
-            "Choose how to handle messages that were already transferred:"
-        )
+        if is_local:
+            text = (
+                "💾 *Local Download — Duplicate Handling*\n\n"
+                "Choose how to handle files that already exist on disk:"
+            )
+        else:
+            text = (
+                "🔁 *Transfer Settings — Duplicate Handling*\n\n"
+                "Choose how to handle messages that were already transferred:"
+            )
         await query.edit_message_text(
             text=text,
             reply_markup=build_duplicate_mode_keyboard("skip"),
@@ -641,7 +667,7 @@ async def _handle_dup_action(query, user_id: int, data: str) -> None:
         return
 
     if data == "dup:done":
-        # Show Transfer Preview!
+        # Show Transfer/Download Preview!
         await _show_transfer_preview(query, user_id)
         return
 

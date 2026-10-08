@@ -299,7 +299,24 @@ class ChatDiscovery:
                 ranked.append((score, sort_key, chat))
 
         ranked.sort(key=lambda item: (item[0], item[1]))
-        return [item[2] for item in ranked]
+        if ranked:
+            return [item[2] for item in ranked]
+
+        # If fuzzy search in cached dialogs yields no results, attempt direct entity lookup (e.g. @channel, t.me link, ID)
+        if client and q:
+            try:
+                target_q = int(q) if (q.startswith("-") or q.isdigit()) else q
+                resolved = await client.get_entity(target_q)
+                if resolved:
+                    disc = cls._classify_entity(resolved)
+                    # Cache it for this session
+                    if account_id in cls._dialog_cache:
+                        cls._dialog_cache[account_id].append(disc)
+                    return [disc]
+            except Exception as e:
+                logger.debug("Direct get_entity fallback for '%s' returned: %s", q, e)
+
+        return []
 
     @classmethod
     async def get_recent_dialogs(

@@ -243,7 +243,17 @@ class ChatPicker:
         """Search dialogs with ranking and display paginated results."""
         udata = session_store.get_data(user_id)
         account_id = udata.get("account_id")
-        client = await user_client_manager.get_client_for_account(account_id)
+        if not account_id:
+            accounts = await user_client_manager.list_user_accounts(user_id)
+            if accounts:
+                account_id = accounts[0].id
+                session_store.update_data(user_id, account_id=account_id)
+
+        client = (
+            await user_client_manager.get_client_for_account(account_id)
+            if account_id
+            else None
+        )
 
         if not client:
             await cls._show_error(
@@ -252,6 +262,12 @@ class ChatPicker:
                 "Telegram account session is disconnected.",
             )
             return
+
+        if not client.is_connected():
+            try:
+                await client.connect()
+            except Exception as e:
+                logger.warning("Could not reconnect client for account %s: %s", account_id, e)
 
         try:
             # Ensure dialogs are cached
@@ -344,7 +360,17 @@ class ChatPicker:
         """Display dialogs filtered by category (channel, group, private, all)."""
         udata = session_store.get_data(user_id)
         account_id = udata.get("account_id")
-        client = await user_client_manager.get_client_for_account(account_id)
+        if not account_id:
+            accounts = await user_client_manager.list_user_accounts(user_id)
+            if accounts:
+                account_id = accounts[0].id
+                session_store.update_data(user_id, account_id=account_id)
+
+        client = (
+            await user_client_manager.get_client_for_account(account_id)
+            if account_id
+            else None
+        )
 
         if not client:
             await cls._show_error(
@@ -353,6 +379,12 @@ class ChatPicker:
                 "Telegram account session is disconnected.",
             )
             return
+
+        if not client.is_connected():
+            try:
+                await client.connect()
+            except Exception as e:
+                logger.warning("Could not reconnect client for account %s: %s", account_id, e)
 
         try:
             await ChatDiscovery.load_dialogs(account_id, client)

@@ -265,10 +265,11 @@ async def text_message_handler(
     # 4. Source Input (Search or ID)
     elif state == BotState.WIZARD_SOURCE_INPUT:
         account_id = udata.get("account_id")
-        client = await user_client_manager.get_client_for_account(account_id)
-        if not client:
-            await message.reply_text("❌ Telegram account session unavailable.")
-            return
+        if not account_id:
+            accounts = await user_client_manager.list_user_accounts(user_id)
+            if accounts:
+                account_id = accounts[0].id
+                session_store.update_data(user_id, account_id=account_id)
 
         await ChatPicker.handle_search_query(
             message_or_query=message,
@@ -282,10 +283,11 @@ async def text_message_handler(
     # 5. Destination Input (Search or ID)
     elif state == BotState.WIZARD_DEST_INPUT:
         account_id = udata.get("account_id")
-        client = await user_client_manager.get_client_for_account(account_id)
-        if not client:
-            await message.reply_text("❌ Telegram account session unavailable.")
-            return
+        if not account_id:
+            accounts = await user_client_manager.list_user_accounts(user_id)
+            if accounts:
+                account_id = accounts[0].id
+                session_store.update_data(user_id, account_id=account_id)
 
         await ChatPicker.handle_search_query(
             message_or_query=message,
