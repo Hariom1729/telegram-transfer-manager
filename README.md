@@ -59,7 +59,7 @@ The system uses a clean two-component design:
 1. Open Telegram and search for [@BotFather](https://t.me/BotFather).
 2. Send `/newbot`.
 3. Follow the instructions to choose a name and username (e.g. `MyTransferManagerBot`).
-4. Copy the HTTP API token provided by BotFather (format: `123456789:ABCdef...`).
+4. Copy the HTTP API token provided by BotFather.
 
 ### 2. Telegram API ID & API Hash Setup
 1. Log in to [https://my.telegram.org](https://my.telegram.org) using your Telegram phone number.
@@ -100,10 +100,10 @@ cp .env.example .env
 
 Edit `.env` with your credentials:
 ```env
-BOT_TOKEN=123456789:ABCdefGHIjklMNOpqrSTUvwxYZ
-API_ID=12345678
-API_HASH=0123456789abcdef0123456789abcdef
-ADMIN_USER_IDS=987654321
+BOT_TOKEN=your_bot_token_here
+API_ID=your_api_id_here
+API_HASH=your_api_hash_here
+ADMIN_USER_IDS=your_telegram_user_id_here
 
 DATABASE_URL=sqlite+aiosqlite:///./data/telegram.db
 LOG_LEVEL=INFO
@@ -112,6 +112,7 @@ MAX_CONCURRENT_TRANSFERS=2
 MAX_RETRY_ATTEMPTS=5
 PROGRESS_UPDATE_INTERVAL=3
 SESSION_DIRECTORY=./data/sessions
+WEBAPP_URL=
 ```
 
 ### Step 5: Start the Application
@@ -271,7 +272,7 @@ Unit tests mock Telegram MTProto operations and run entirely in-memory:
 pytest -v
 ```
 
-All 14 tests cover:
+All tests cover:
 - Database schema and unique constraints
 - Deduplication mapping logic
 - FloodWait handling & exponential backoff
@@ -279,6 +280,21 @@ All 14 tests cover:
 - Crash recovery on startup
 - Content classification and filtering
 - Input validation
+
+---
+
+## ✨ Modern Web Dashboard & Telegram Mini App
+
+The application features a modern glassmorphic web interface that works both as a standalone web app and as a native Telegram Mini App (TMA):
+
+- **Standalone Web Access**: Visit `http://localhost:7860` (or your public Hugging Face / VPS URL on port `7860`).
+- **Telegram Mini App**: Set `WEBAPP_URL=https://your-domain.com` in `.env` to enable the `[✨ Modern Web Dashboard]` button directly inside Telegram.
+- **Key Capabilities**:
+  - Live real-time transfer progress with accurate percentage bars (always 100% on completion).
+  - 1-Click re-transfer of only failed messages.
+  - Interactive pause, resume, and cancellation controls.
+  - Transfer history and connected account status cards.
+  - Live system health and MTProto benchmark speed metrics.
 
 ---
 

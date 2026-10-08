@@ -88,6 +88,23 @@ async def handle_callback_query(
         await cmd_settings(update, context)
         return
 
+    elif data == "nav:webapp":
+        webapp_text = (
+            "✨ *Modern Web Dashboard & Telegram Mini App*\n\n"
+            "The Transfer Manager includes a full modern glassmorphic web dashboard!\n\n"
+            "🌐 *How to Access:*\n"
+            "• **Local Browser:** `http://localhost:7860`\n"
+            "• **Hugging Face / VPS:** Accessible directly on your app's public URL port `7860`\n\n"
+            "📱 *Enable Telegram Mini App in Telegram:*\n"
+            "Add `WEBAPP_URL=https://your-public-url` in your `.env` file. "
+            "This button will then open the dashboard directly inside Telegram!"
+        )
+        kb = InlineKeyboardMarkup(
+            [[InlineKeyboardButton("🏠 Main Menu", callback_data="nav:home")]]
+        )
+        await query.edit_message_text(text=webapp_text, reply_markup=kb, parse_mode="Markdown")
+        return
+
     elif data == "nav:cancel":
         was_in_auth = session_store.get_state(user_id) in (
             BotState.AUTH_WAITING_PHONE,

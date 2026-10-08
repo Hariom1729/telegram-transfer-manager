@@ -1,7 +1,7 @@
 """Inline Keyboard Builders for Telegram Transfer Manager UI."""
 
-from typing import List, Optional
-from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup, WebAppInfo
+from app.config import settings
 from app.models.telegram_account import TelegramAccount
 from app.telegram.discovery import DiscoveredChat
 from app.telegram.topics import DiscoveredTopic
@@ -9,7 +9,17 @@ from app.telegram.topics import DiscoveredTopic
 
 def build_main_menu_keyboard() -> InlineKeyboardMarkup:
     """Construct the primary dashboard inline keyboard."""
-    keyboard = [
+    keyboard = []
+    if settings.WEBAPP_URL:
+        keyboard.append([
+            InlineKeyboardButton("✨ Modern Web Dashboard", web_app=WebAppInfo(url=settings.WEBAPP_URL))
+        ])
+    else:
+        keyboard.append([
+            InlineKeyboardButton("✨ Modern Web Dashboard", callback_data="nav:webapp")
+        ])
+
+    keyboard.extend([
         [
             InlineKeyboardButton("📥 New Transfer", callback_data="nav:new_transfer"),
             InlineKeyboardButton("💾 Local Download", callback_data="nav:new_download"),
@@ -29,7 +39,7 @@ def build_main_menu_keyboard() -> InlineKeyboardMarkup:
         [
             InlineKeyboardButton("ℹ️ Help", callback_data="nav:help"),
         ],
-    ]
+    ])
     return InlineKeyboardMarkup(keyboard)
 
 

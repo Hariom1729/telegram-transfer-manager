@@ -462,3 +462,36 @@ async def test_cmd_health_reports_status_and_hugging_face_port():
     assert "7860" in text
     assert "Hugging Face Spaces:" in text
 
+
+@pytest.mark.asyncio
+async def test_health_server_serves_web_ui_and_health():
+    """Verify health server serves modern web dashboard on / and health check on /health."""
+    from unittest.mock import MagicMock
+    from app.health_server import _handle_http_request
+
+    # Test / request returns HTML
+    reader_root = AsyncMock()
+    reader_root.read.return_value = b"GET / HTTP/1.1\r\nHost: localhost\r\n\r\n"
+    writer_root = MagicMock()
+    writer_root.drain = AsyncMock()
+    writer_root.wait_closed = AsyncMock()
+
+    await _handle_http_request(reader_root, writer_root)
+    # Check that writer.write was called with Content-Type: text/html
+    written_data = b"".join(call.args[0] for call in writer_root.write.call_args_list)
+    assert b"Content-Type: text/html" in written_data
+    assert b"Transfer Manager" in written_data
+
+    # Test /health request returns JSON
+    reader_health = AsyncMock()
+    reader_health.read.return_value = b"GET /health HTTP/1.1\r\nHost: localhost\r\n\r\n"
+    writer_health = MagicMock()
+    writer_health.drain = AsyncMock()
+    writer_health.wait_closed = AsyncMock()
+
+    await _handle_http_request(reader_health, writer_health)
+    written_health = b"".join(call.args[0] for call in writer_health.write.call_args_list)
+    assert b"Content-Type: application/json" in written_health
+    assert b"\"status\": \"ok\"" in written_health
+
+

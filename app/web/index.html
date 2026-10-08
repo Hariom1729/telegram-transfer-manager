@@ -1,0 +1,377 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>Telegram Transfer Manager</title>
+  <!-- Telegram Web App SDK -->
+  <script src="https://telegram.org/js/telegram-web-app.js"></script>
+  <!-- Tailwind CSS -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <!-- FontAwesome Icons -->
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap');
+    body {
+      font-family: 'Plus Jakarta Sans', system-ui, -apple-system, sans-serif;
+      background-color: var(--tg-theme-bg-color, #090d16);
+      color: var(--tg-theme-text-color, #f1f5f9);
+    }
+    .glass-card {
+      background: var(--tg-theme-secondary-bg-color, rgba(30, 41, 59, 0.7));
+      backdrop-filter: blur(16px);
+      -webkit-backdrop-filter: blur(16px);
+      border: 1px solid rgba(255, 255, 255, 0.08);
+    }
+    .glow-primary {
+      box-shadow: 0 0 25px -5px rgba(56, 189, 248, 0.35);
+    }
+  </style>
+</head>
+<body class="min-h-screen antialiased flex flex-col selection:bg-sky-500 selection:text-white pb-12">
+
+  <!-- Header -->
+  <header class="sticky top-0 z-50 bg-slate-900/90 backdrop-blur-xl border-b border-slate-800/80 px-4 lg:px-8 py-3">
+    <div class="max-w-6xl mx-auto flex items-center justify-between">
+      <div class="flex items-center gap-3">
+        <div class="w-9 h-9 rounded-xl bg-gradient-to-tr from-sky-500 to-indigo-600 flex items-center justify-center text-white shadow-md shadow-sky-500/25">
+          <i class="fa-solid fa-paper-plane text-base"></i>
+        </div>
+        <div>
+          <div class="flex items-center gap-2">
+            <h1 class="font-bold text-base leading-tight">Transfer Manager</h1>
+            <span class="px-2 py-0.2 text-[10px] font-semibold uppercase bg-sky-500/10 text-sky-400 border border-sky-500/20 rounded-full">Web & TMA</span>
+          </div>
+          <p class="text-[11px] text-slate-400 flex items-center gap-1.5">
+            <span class="inline-block w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
+            Online & Ready
+          </p>
+        </div>
+      </div>
+
+      <!-- Quick action refresh -->
+      <button onclick="fetchStatus()" class="px-3 py-1.5 text-xs font-semibold rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 transition flex items-center gap-1.5">
+        <i class="fa-solid fa-rotate-right"></i> <span class="hidden sm:inline">Refresh</span>
+      </button>
+    </div>
+
+    <!-- Navigation Pills -->
+    <div class="flex items-center justify-center gap-2 mt-3 overflow-x-auto">
+      <button onclick="switchTab('transfers')" id="tab-btn-transfers" class="tab-btn active px-4 py-1.5 rounded-xl text-xs font-semibold bg-sky-500 text-white transition">
+        <i class="fa-solid fa-bolt mr-1"></i> Transfers
+      </button>
+      <button onclick="switchTab('history')" id="tab-btn-history" class="tab-btn px-4 py-1.5 rounded-xl text-xs font-semibold text-slate-400 hover:text-slate-200 transition">
+        <i class="fa-solid fa-clock-rotate-left mr-1"></i> History
+      </button>
+      <button onclick="switchTab('accounts')" id="tab-btn-accounts" class="tab-btn px-4 py-1.5 rounded-xl text-xs font-semibold text-slate-400 hover:text-slate-200 transition">
+        <i class="fa-solid fa-user-shield mr-1"></i> Accounts
+      </button>
+      <button onclick="switchTab('system')" id="tab-btn-system" class="tab-btn px-4 py-1.5 rounded-xl text-xs font-semibold text-slate-400 hover:text-slate-200 transition">
+        <i class="fa-solid fa-gauge mr-1"></i> System
+      </button>
+    </div>
+  </header>
+
+  <!-- Main Content -->
+  <main class="flex-1 max-w-6xl w-full mx-auto p-4 lg:p-6 space-y-6">
+
+    <!-- TAB 1: TRANSFERS -->
+    <section id="tab-transfers" class="tab-content space-y-4">
+      <div class="flex items-center justify-between">
+        <h2 class="text-sm font-bold flex items-center gap-2">
+          <i class="fa-solid fa-bars-progress text-sky-400"></i> Active Transfer Jobs
+        </h2>
+        <span id="job-count-badge" class="text-xs text-slate-400">Loading...</span>
+      </div>
+
+      <!-- Job Cards Container -->
+      <div id="active-jobs-list" class="space-y-4">
+        <div class="glass-card rounded-2xl p-6 text-center text-slate-400 text-sm">
+          <i class="fa-solid fa-spinner fa-spin text-sky-400 text-xl mb-2 block"></i>
+          Connecting to Transfer Engine...
+        </div>
+      </div>
+    </section>
+
+    <!-- TAB 2: HISTORY -->
+    <section id="tab-history" class="tab-content hidden space-y-4">
+      <div class="flex items-center justify-between">
+        <h2 class="text-sm font-bold flex items-center gap-2">
+          <i class="fa-solid fa-clock-rotate-left text-sky-400"></i> Past Transfer History
+        </h2>
+        <button onclick="fetchHistory()" class="text-xs text-sky-400 hover:underline">Reload</button>
+      </div>
+
+      <div id="history-jobs-list" class="glass-card rounded-2xl overflow-hidden divide-y divide-slate-800/80">
+        <div class="p-6 text-center text-slate-400 text-xs">Loading history...</div>
+      </div>
+    </section>
+
+    <!-- TAB 3: ACCOUNTS -->
+    <section id="tab-accounts" class="tab-content hidden space-y-4">
+      <div class="flex items-center justify-between">
+        <h2 class="text-sm font-bold flex items-center gap-2">
+          <i class="fa-solid fa-user-shield text-sky-400"></i> Connected Accounts
+        </h2>
+      </div>
+
+      <div id="accounts-list" class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+        <div class="glass-card rounded-2xl p-6 text-center text-slate-400 text-xs">Loading accounts...</div>
+      </div>
+    </section>
+
+    <!-- TAB 4: SYSTEM & BENCHMARK -->
+    <section id="tab-system" class="tab-content hidden space-y-4">
+      <div class="glass-card rounded-2xl p-6 space-y-4">
+        <h2 class="text-sm font-bold flex items-center gap-2">
+          <i class="fa-solid fa-gauge-high text-sky-400"></i> System & MTProto Diagnostics
+        </h2>
+        <div class="grid grid-cols-2 sm:grid-cols-3 gap-3 text-xs">
+          <div class="bg-slate-900/60 p-3.5 rounded-xl border border-slate-800">
+            <span class="text-slate-400">Status</span>
+            <div class="text-base font-bold text-emerald-400 mt-1" id="sys-status">Healthy</div>
+          </div>
+          <div class="bg-slate-900/60 p-3.5 rounded-xl border border-slate-800">
+            <span class="text-slate-400">Engine Uptime</span>
+            <div class="text-base font-bold text-white mt-1" id="sys-uptime">--</div>
+          </div>
+          <div class="bg-slate-900/60 p-3.5 rounded-xl border border-slate-800">
+            <span class="text-slate-400">Cryptg Acceleration</span>
+            <div class="text-base font-bold text-sky-400 mt-1">Active (C-lib)</div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+  </main>
+
+  <!-- Notification Toast -->
+  <div id="toast" class="fixed bottom-6 right-6 z-50 transform translate-y-20 opacity-0 transition-all duration-300 pointer-events-none">
+    <div class="bg-slate-900 border border-slate-700 text-white px-4 py-2.5 rounded-xl shadow-2xl flex items-center gap-3">
+      <i id="toast-icon" class="fa-solid fa-circle-check text-emerald-400"></i>
+      <span id="toast-msg" class="text-xs font-semibold">Updated</span>
+    </div>
+  </div>
+
+  <script>
+    // Initialize Telegram WebApp SDK if available
+    const tg = window.Telegram?.WebApp;
+    if (tg) {
+      tg.ready();
+      tg.expand();
+    }
+
+    function showToast(msg, isSuccess = true) {
+      const toast = document.getElementById('toast');
+      document.getElementById('toast-msg').innerText = msg;
+      document.getElementById('toast-icon').className = isSuccess 
+        ? "fa-solid fa-circle-check text-emerald-400" 
+        : "fa-solid fa-circle-exclamation text-amber-400";
+      toast.classList.remove('translate-y-20', 'opacity-0');
+      if (tg?.HapticFeedback) {
+        tg.HapticFeedback.notificationOccurred(isSuccess ? 'success' : 'warning');
+      }
+      setTimeout(() => toast.classList.add('translate-y-20', 'opacity-0'), 3000);
+    }
+
+    function switchTab(tabId) {
+      document.querySelectorAll('.tab-content').forEach(el => el.classList.add('hidden'));
+      document.getElementById('tab-' + tabId).classList.remove('hidden');
+
+      document.querySelectorAll('.tab-btn').forEach(btn => {
+        btn.classList.remove('bg-sky-500', 'text-white');
+        btn.classList.add('text-slate-400');
+      });
+      const activeBtn = document.getElementById('tab-btn-' + tabId);
+      if (activeBtn) {
+        activeBtn.classList.remove('text-slate-400');
+        activeBtn.classList.add('bg-sky-500', 'text-white');
+      }
+
+      if (tabId === 'history') fetchHistory();
+      if (tabId === 'accounts') fetchAccounts();
+      if (tabId === 'system') fetchSystem();
+    }
+
+    async function fetchStatus() {
+      try {
+        const res = await fetch('/api/status');
+        if (!res.ok) throw new Error('API unavailable');
+        const data = await res.json();
+        renderActiveJobs(data.jobs || []);
+      } catch (e) {
+        document.getElementById('active-jobs-list').innerHTML = `
+          <div class="glass-card rounded-2xl p-6 text-center text-slate-400 text-xs">
+            <i class="fa-solid fa-circle-info text-sky-400 text-lg mb-2 block"></i>
+            No active transfers running right now. Use the bot or /transfer command to begin!
+          </div>
+        `;
+        document.getElementById('job-count-badge').innerText = '0 active';
+      }
+    }
+
+    function renderActiveJobs(jobs) {
+      const container = document.getElementById('active-jobs-list');
+      document.getElementById('job-count-badge').innerText = `${jobs.length} active`;
+
+      if (!jobs || jobs.length === 0) {
+        container.innerHTML = `
+          <div class="glass-card rounded-2xl p-6 text-center text-slate-400 text-xs">
+            <i class="fa-solid fa-circle-check text-emerald-400 text-lg mb-2 block"></i>
+            All transfers completed! No active jobs in queue.
+          </div>
+        `;
+        return;
+      }
+
+      container.innerHTML = jobs.map(j => {
+        const pct = (j.status === 'COMPLETED') ? 100 : (j.total > 0 ? Math.min(100, Math.round((j.processed / j.total) * 100)) : 0);
+        const isCompleted = j.status === 'COMPLETED';
+        const isPaused = j.status === 'PAUSED';
+
+        let retryBtn = '';
+        if (j.failed > 0) {
+          retryBtn = `
+            <button onclick="retryFailedJob(${j.id})" class="px-3 py-1.5 rounded-xl bg-gradient-to-r from-amber-500 to-rose-500 hover:from-amber-400 text-white text-xs font-bold flex items-center gap-1.5 shadow-sm">
+              <i class="fa-solid fa-rotate"></i> Retransfer ${j.failed} Failed
+            </button>
+          `;
+        }
+
+        return `
+          <div class="glass-card rounded-2xl p-4 sm:p-5 border-l-4 ${isCompleted ? 'border-l-emerald-500' : (isPaused ? 'border-l-amber-500' : 'border-l-sky-500')} space-y-3">
+            <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+              <div class="flex items-center gap-2.5">
+                <span class="px-2 py-0.5 text-xs font-bold rounded-lg bg-sky-500/20 text-sky-300">#${j.id}</span>
+                <span class="font-bold text-sm text-white">${j.source_title || 'Source'} &rarr; ${j.destination_title || 'Destination'}</span>
+                <span class="px-2 py-0.5 rounded text-[10px] font-semibold bg-slate-800 text-slate-300 uppercase">${j.status}</span>
+              </div>
+              <div class="flex items-center gap-2">
+                ${retryBtn}
+                ${!isCompleted ? `
+                  <button onclick="toggleJob(${j.id}, '${isPaused ? 'resume' : 'pause'}')" class="px-2.5 py-1 rounded-lg bg-slate-800 text-slate-300 text-xs font-medium hover:bg-slate-700">
+                    <i class="fa-solid fa-${isPaused ? 'play' : 'pause'}"></i> ${isPaused ? 'Resume' : 'Pause'}
+                  </button>
+                  <button onclick="toggleJob(${j.id}, 'cancel')" class="px-2.5 py-1 rounded-lg bg-rose-500/10 text-rose-400 text-xs font-medium hover:bg-rose-500/20">
+                    <i class="fa-solid fa-xmark"></i> Cancel
+                  </button>
+                ` : ''}
+              </div>
+            </div>
+
+            <div class="space-y-1.5">
+              <div class="flex justify-between items-center text-xs">
+                <span class="font-semibold text-sky-400">${pct}%</span>
+                <span class="text-slate-400">Processed: <strong class="text-white">${j.processed} ${j.total > 0 ? '/ ' + j.total : ''}</strong></span>
+              </div>
+              <div class="w-full bg-slate-800 rounded-full h-2.5 overflow-hidden">
+                <div class="bg-gradient-to-r from-sky-500 to-indigo-500 h-full rounded-full transition-all duration-300" style="width: ${pct}%;"></div>
+              </div>
+              <div class="flex justify-between text-[11px] text-slate-400 pt-0.5">
+                <div class="flex items-center gap-3">
+                  <span class="text-emerald-400">✅ ${j.success || 0}</span>
+                  <span class="text-amber-400">⏭ ${j.skipped || 0}</span>
+                  <span class="text-rose-400">❌ ${j.failed || 0}</span>
+                </div>
+                ${j.speed ? `<span>Speed: <strong class="text-slate-200">${j.speed}</strong></span>` : ''}
+              </div>
+            </div>
+          </div>
+        `;
+      }).join('');
+    }
+
+    async function toggleJob(jobId, action) {
+      try {
+        const res = await fetch(`/api/jobs/${action}`, {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({job_id: jobId})
+        });
+        showToast(`Job #${jobId} ${action} request sent.`);
+        fetchStatus();
+      } catch (e) {
+        showToast(`Action failed: ${e}`, false);
+      }
+    }
+
+    async function retryFailedJob(jobId) {
+      try {
+        const res = await fetch(`/api/jobs/retry-failed`, {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({job_id: jobId})
+        });
+        showToast(`Retransferring failed messages for #${jobId}...`);
+        fetchStatus();
+      } catch (e) {
+        showToast(`Failed to trigger retry: ${e}`, false);
+      }
+    }
+
+    async function fetchHistory() {
+      try {
+        const res = await fetch('/api/history');
+        const data = await res.json();
+        const list = document.getElementById('history-jobs-list');
+        if (!data.history || data.history.length === 0) {
+          list.innerHTML = '<div class="p-6 text-center text-slate-400 text-xs">No past transfers.</div>';
+          return;
+        }
+        list.innerHTML = data.history.map(j => `
+          <div class="p-3.5 flex items-center justify-between hover:bg-slate-800/30 text-xs">
+            <div>
+              <div class="font-semibold text-white">#${j.id} ${j.source_title || 'Source'} &rarr; ${j.destination_title || 'Destination'}</div>
+              <div class="text-slate-400 text-[11px]">${j.processed} messages • ✅ ${j.success} • ❌ ${j.failed}</div>
+            </div>
+            <div class="flex items-center gap-2">
+              <span class="px-2 py-0.5 rounded text-[10px] font-bold ${j.status === 'COMPLETED' ? 'bg-emerald-500/10 text-emerald-400' : 'bg-slate-800 text-slate-400'}">${j.status}</span>
+              ${j.failed > 0 ? `
+                <button onclick="retryFailedJob(${j.id})" class="px-2.5 py-1 bg-amber-500/10 hover:bg-amber-500/20 text-amber-400 rounded-lg text-[11px] font-semibold">
+                  <i class="fa-solid fa-rotate"></i> Retransfer ${j.failed}
+                </button>
+              ` : ''}
+            </div>
+          </div>
+        `).join('');
+      } catch (e) {
+        document.getElementById('history-jobs-list').innerHTML = '<div class="p-6 text-center text-slate-400 text-xs">Could not load history.</div>';
+      }
+    }
+
+    async function fetchAccounts() {
+      try {
+        const res = await fetch('/api/accounts');
+        const data = await res.json();
+        const list = document.getElementById('accounts-list');
+        if (!data.accounts || data.accounts.length === 0) {
+          list.innerHTML = '<div class="glass-card rounded-2xl p-6 text-center text-slate-400 text-xs col-span-2">No connected accounts yet. Connect via bot /connect.</div>';
+          return;
+        }
+        list.innerHTML = data.accounts.map(acc => `
+          <div class="glass-card rounded-2xl p-4 space-y-2 border border-slate-800 text-xs">
+            <div class="flex items-center justify-between">
+              <div class="font-bold text-white text-sm">${acc.name}</div>
+              <span class="px-2 py-0.5 rounded text-[10px] bg-emerald-500/10 text-emerald-400 font-semibold">Active</span>
+            </div>
+            <div class="text-slate-400">Account ID: #${acc.id}</div>
+          </div>
+        `).join('');
+      } catch (e) {}
+    }
+
+    async function fetchSystem() {
+      try {
+        const res = await fetch('/health');
+        const data = await res.json();
+        document.getElementById('sys-status').innerText = data.healthy ? 'Healthy' : 'Degraded';
+        document.getElementById('sys-uptime').innerText = `${data.uptime_seconds || 0}s`;
+      } catch (e) {}
+    }
+
+    // Initial fetch & auto poll every 3 seconds
+    fetchStatus();
+    setInterval(fetchStatus, 3000);
+  </script>
+</body>
+</html>

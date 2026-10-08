@@ -74,6 +74,9 @@ class Settings:
         "yes",
     )
 
+    # Modern Web Dashboard & Telegram Mini App URL (e.g. https://your-space.hf.space)
+    WEBAPP_URL: str = os.getenv("WEBAPP_URL", "").strip()
+
     # Session Storage (Always absolute path anchored to PROJECT_ROOT)
     _raw_session_dir = os.getenv("SESSION_DIRECTORY", "./data/sessions").strip()
     _session_p = Path(_raw_session_dir)
