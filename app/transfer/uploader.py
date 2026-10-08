@@ -74,7 +74,7 @@ class FastMediaUploader:
         is_big = file_size > 10 * 1024 * 1024  # > 10 MB uses InputFileBig
         file_id = helpers.generate_random_long()
 
-        worker_count = workers if workers is not None else getattr(settings, "UPLOAD_WORKERS", 4)
+        worker_count = workers if workers is not None else getattr(settings, "UPLOAD_WORKERS", 8)
         worker_count = min(worker_count, max(1, part_count))
 
         # For small files (<= 10 MB), calculate MD5 checksum for InputFile

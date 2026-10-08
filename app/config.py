@@ -73,7 +73,7 @@ class Settings:
 
     # Optimized Media Downloader & Uploader Settings
     DOWNLOAD_WORKERS: int = int(os.getenv("DOWNLOAD_WORKERS", "8").strip())
-    UPLOAD_WORKERS: int = int(os.getenv("UPLOAD_WORKERS", "4").strip())
+    UPLOAD_WORKERS: int = int(os.getenv("UPLOAD_WORKERS", "8").strip())
     DOWNLOAD_REQUEST_SIZE: int = int(
         os.getenv("DOWNLOAD_REQUEST_SIZE", "524288").strip()
     )
@@ -185,9 +185,11 @@ class Settings:
                 "BOT_TOKEN is missing! Set it in your environment or .env file."
             )
 
-        # Validate & normalize download workers (allowed: 1, 2, 4, 8)
-        if cls.DOWNLOAD_WORKERS not in (1, 2, 4, 8):
-            cls.DOWNLOAD_WORKERS = 4
+        # Validate & normalize download and upload workers (allowed: 1, 2, 4, 8, 12, 16)
+        if cls.DOWNLOAD_WORKERS not in (1, 2, 4, 8, 12, 16):
+            cls.DOWNLOAD_WORKERS = 8
+        if cls.UPLOAD_WORKERS not in (1, 2, 4, 8, 12, 16):
+            cls.UPLOAD_WORKERS = 8
 
         # Validate & normalize download request size (must be multiple of 4096 between 4KB and 512KB)
         cls.DOWNLOAD_REQUEST_SIZE = (cls.DOWNLOAD_REQUEST_SIZE // 4096) * 4096

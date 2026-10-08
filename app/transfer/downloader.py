@@ -321,8 +321,8 @@ class FastMediaDownloader:
         chunk_size = max(4096, min(524288, chunk_size))
 
         worker_count = workers if workers is not None else settings.DOWNLOAD_WORKERS
-        if worker_count not in (1, 2, 4, 8):
-            worker_count = 4
+        if worker_count not in (1, 2, 4, 8, 12, 16):
+            worker_count = 8
 
         # For small files (<= chunk_size) or unsupported location types, use standard download_media
         if not info or not file_size or file_size <= chunk_size:
