@@ -77,7 +77,7 @@ The system uses a clean two-component design:
 
 ### Step 1: Clone and Navigate
 ```bash
-git clone <repository_url>
+git clone https://github.com/Hariom1729/telegram-transfer-manager
 cd telegram-transfer-manager
 ```
 
