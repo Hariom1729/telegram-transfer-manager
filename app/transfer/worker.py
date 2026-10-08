@@ -350,6 +350,17 @@ class TransferWorker:
                 job.error_summary = reason
         logger.error("Transfer failed job=%s reason=%s", job_id, reason)
 
+        tracker = self._active_trackers.get(job_id)
+        if tracker:
+            fail_kb = InlineKeyboardMarkup(
+                [[InlineKeyboardButton("🏠 Home", callback_data="nav:home")]]
+            )
+            await tracker.update(
+                force=True,
+                status_label=f"FAILED",
+                custom_keyboard=fail_kb,
+            )
+
     async def _complete_job(
         self, job_id: int, tracker: ProgressTracker, duration: float
     ) -> None:
@@ -374,6 +385,22 @@ class TransferWorker:
             tracker.skipped_messages,
             tracker.failed_messages,
             duration,
+        )
+
+        done_kb = InlineKeyboardMarkup(
+            [
+                [
+                    InlineKeyboardButton(
+                        "📋 Transfer History", callback_data="nav:history"
+                    ),
+                    InlineKeyboardButton("🏠 Home", callback_data="nav:home"),
+                ]
+            ]
+        )
+        await tracker.update(
+            force=True,
+            status_label="COMPLETED",
+            custom_keyboard=done_kb,
         )
 
 

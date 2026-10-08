@@ -47,7 +47,9 @@ class TransferManager:
         end_message_id: Optional[int] = None,
         total_messages: int = 0,
     ) -> TransferJob:
-        """Create and persist a new TransferJob in QUEUED state."""
+        if (total_messages == 0 or total_messages is None) and start_message_id and end_message_id:
+            total_messages = max(0, end_message_id - start_message_id + 1)
+
         async with get_session() as session:
             job = TransferJob(
                 owner_id=owner_id,

@@ -48,27 +48,42 @@ class ProgressTracker:
 
     def format_status_message(self, status_label: Optional[str] = None) -> str:
         """Format the Telegram progress message matching Section 20 specification."""
+        is_local = "Local" in self.destination_title or "💾" in self.destination_title
+        effective_total = max(self.total_messages, self.processed_messages) if self.total_messages > 0 else self.processed_messages
+
         progress_bar = format_progress_bar(
             self.processed_messages, self.total_messages
         )
         speed_str = f"{self.speed:.1f} msg/s" if self.speed > 0 else "-- msg/s"
 
         topic_section = (
-            f"\nTopic:\n🧵 {self.topic_name}\n" if self.topic_name else "\n"
+            f"\nTopic:\n🧵 {self.topic_name}\n" if (self.topic_name and not is_local) else "\n"
         )
-        header = f"📦 Transfer #{self.job_id}"
-        if status_label:
-            header += f" ({status_label})"
+        header_prefix = "💾 Local Download" if is_local else "📦 Transfer"
+        if status_label == "COMPLETED":
+            header = f"✅ {header_prefix} #{self.job_id} (COMPLETED)"
+        elif status_label:
+            header = f"{header_prefix} #{self.job_id} ({status_label})"
+        else:
+            header = f"{header_prefix} #{self.job_id}"
+
+        dest_icon = "💾" if is_local else "👥"
+
+        count_display = (
+            f"{self.processed_messages:,} / {self.total_messages:,}"
+            if self.total_messages > 0
+            else f"Processed: {self.processed_messages:,}"
+        )
 
         text = (
             f"{header}\n\n"
             f"Source:\n📢 {self.source_title}\n\n"
-            f"Destination:\n👥 {self.destination_title}"
+            f"Destination:\n{dest_icon} {self.destination_title}"
             f"{topic_section}\n"
             f"━━━━━━━━━━━━━━━━\n"
             f"{progress_bar}\n"
             f"━━━━━━━━━━━━━━━━\n\n"
-            f"{self.processed_messages:,} / {self.total_messages:,}\n\n"
+            f"{count_display}\n\n"
             f"✅ Success: {self.successful_messages:,}\n"
             f"⏭ Skipped: {self.skipped_messages:,}\n"
             f"❌ Failed: {self.failed_messages:,}\n\n"
