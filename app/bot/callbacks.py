@@ -5,6 +5,7 @@ from typing import Optional
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import ContextTypes
 from telethon import TelegramClient
+from app.bot.chat_picker import ChatPicker
 from app.bot.keyboards import (
     build_accounts_keyboard,
     build_auth_code_keyboard,
@@ -272,7 +273,7 @@ async def handle_callback_query(
         session_store.clear(user_id)
         if len(accounts) == 1:
             session_store.update_data(user_id, account_id=accounts[0].id)
-            await _show_source_modes(query, user_id)
+            await ChatPicker.show_source_picker(query, user_id)
         else:
             text = "👤 *Select Telegram Account* to use for this transfer:"
             buttons = [
@@ -297,17 +298,21 @@ async def handle_callback_query(
     elif data.startswith("wizard:acc:"):
         acc_id = int(data.split(":")[-1])
         session_store.update_data(user_id, account_id=acc_id)
-        await _show_source_modes(query, user_id)
+        await ChatPicker.show_source_picker(query, user_id)
         return
 
-    # Source Selection
+    # Chat Picker Callbacks (Source & Destination)
+    elif data.startswith("cp:"):
+        await _handle_chat_picker_callback(query, user_id, data)
+        return
+
+    # Fallback legacy Source / Destination Selection
     elif data.startswith("src:"):
-        await _handle_source_action(query, user_id, data)
+        await ChatPicker.show_source_picker(query, user_id)
         return
 
-    # Destination Selection
     elif data.startswith("dst:"):
-        await _handle_dest_action(query, user_id, data)
+        await ChatPicker.show_destination_picker(query, user_id)
         return
 
     # Topic Selection
@@ -341,174 +346,52 @@ async def handle_callback_query(
         return
 
 
-async def _show_source_modes(query, user_id: int) -> None:
-    """Show options to pick transfer source."""
-    session_store.set_state(user_id, BotState.WIZARD_SOURCE_SELECT)
-    text = (
-        "📥 *Select Source*\n\n"
-        "Choose how you would like to select the source chat or channel:"
-    )
-    await query.edit_message_text(
-        text=text,
-        reply_markup=build_chat_selection_modes_keyboard("source"),
-        parse_mode="Markdown",
-    )
-
-
-async def _handle_source_action(query, user_id: int, data: str) -> None:
-    """Handle source picking actions."""
-    account_id = session_store.get_data(user_id).get("account_id")
-    client = await user_client_manager.get_client_for_account(account_id)
-    if not client:
-        await query.edit_message_text("❌ Account session disconnected.")
+async def _handle_chat_picker_callback(query, user_id: int, data: str) -> None:
+    """Handle all ChatPicker interactions."""
+    if data == "cp:src:to_dest":
+        await ChatPicker.show_destination_picker(query, user_id)
         return
 
-    if data == "src:mode:manual":
-        session_store.set_state(user_id, BotState.WIZARD_SOURCE_INPUT)
-        text = (
-            "🆔 *Enter Source Chat ID or Username*\n\n"
-            "Please send the numeric chat ID (e.g. `-1001234567890`) or public `@username`:"
-        )
-        kb = InlineKeyboardMarkup(
-            [[InlineKeyboardButton("⬅️ Back", callback_data="nav:new_transfer")]]
-        )
-        await query.edit_message_text(
-            text=text, reply_markup=kb, parse_mode="Markdown"
-        )
+    parts = data.split(":")
+    if len(parts) >= 3 and parts[1] == "retry":
+        target = parts[2]
+        if target == "source":
+            await ChatPicker.show_source_picker(query, user_id)
+        else:
+            await ChatPicker.show_destination_picker(query, user_id)
         return
 
-    if data == "src:mode:search":
-        session_store.set_state(user_id, BotState.WIZARD_SOURCE_INPUT)
-        text = "🔎 *Search Source Chat*\n\nPlease send the title or keyword to search for:"
-        kb = InlineKeyboardMarkup(
-            [[InlineKeyboardButton("⬅️ Back", callback_data="nav:new_transfer")]]
-        )
-        await query.edit_message_text(
-            text=text, reply_markup=kb, parse_mode="Markdown"
-        )
-        return
+    if len(parts) >= 2:
+        tgt_code = parts[1]
+        target = "source" if tgt_code == "src" else "dest"
+        action = parts[2] if len(parts) > 2 else "menu"
 
-    if data.startswith("src:cat:"):
-        cat = data.split(":")[-1]
-        chats = await ChatDiscovery.get_dialogs(client, filter_type=cat, limit=40)
-        session_store.update_data(user_id, discovered_source_chats=chats)
-        await query.edit_message_text(
-            text=f"Select source {cat}:",
-            reply_markup=build_chat_list_keyboard(chats, "source", page=0),
-        )
-        return
-
-    if data.startswith("src:page:"):
-        page = int(data.split(":")[-1])
-        chats = session_store.get_data(user_id).get(
-            "discovered_source_chats", []
-        )
-        await query.edit_message_text(
-            text="Select source chat:",
-            reply_markup=build_chat_list_keyboard(chats, "source", page=page),
-        )
-        return
-
-    if data.startswith("src:pick:"):
-        chat_id = int(data.split(":")[-1])
-        # Find title
-        chats = session_store.get_data(user_id).get(
-            "discovered_source_chats", []
-        )
-        title = next((c.title for c in chats if c.id == chat_id), str(chat_id))
-        session_store.update_data(
-            user_id, source_chat_id=chat_id, source_chat_title=title
-        )
-
-        # Move to Destination selection
-        text = (
-            f"✅ *Source Selected:*\n📢 {title}\n\n"
-            "Now select the *Destination*:"
-        )
-        await query.edit_message_text(
-            text=text,
-            reply_markup=build_chat_selection_modes_keyboard("dest"),
-            parse_mode="Markdown",
-        )
-        return
-
-
-async def _handle_dest_action(query, user_id: int, data: str) -> None:
-    """Handle destination picking actions."""
-    account_id = session_store.get_data(user_id).get("account_id")
-    client = await user_client_manager.get_client_for_account(account_id)
-    if not client:
-        await query.edit_message_text("❌ Account session disconnected.")
-        return
-
-    if data == "dst:mode:manual":
-        session_store.set_state(user_id, BotState.WIZARD_DEST_INPUT)
-        text = (
-            "🆔 *Enter Destination Chat ID or Username*\n\n"
-            "Please send the numeric chat ID (e.g. `-1001234567890`) or public `@username`:"
-        )
-        kb = InlineKeyboardMarkup(
-            [[InlineKeyboardButton("⬅️ Back", callback_data="dst:back")]]
-        )
-        await query.edit_message_text(
-            text=text, reply_markup=kb, parse_mode="Markdown"
-        )
-        return
-
-    if data.startswith("dst:cat:"):
-        cat = data.split(":")[-1]
-        chats = await ChatDiscovery.get_dialogs(client, filter_type=cat, limit=40)
-        session_store.update_data(user_id, discovered_dest_chats=chats)
-        await query.edit_message_text(
-            text=f"Select destination {cat}:",
-            reply_markup=build_chat_list_keyboard(chats, "dest", page=0),
-        )
-        return
-
-    if data.startswith("dst:page:"):
-        page = int(data.split(":")[-1])
-        chats = session_store.get_data(user_id).get("discovered_dest_chats", [])
-        await query.edit_message_text(
-            text="Select destination chat:",
-            reply_markup=build_chat_list_keyboard(chats, "dest", page=page),
-        )
-        return
-
-    if data.startswith("dst:pick:"):
-        chat_id = int(data.split(":")[-1])
-        chats = session_store.get_data(user_id).get("discovered_dest_chats", [])
-        picked = next((c for c in chats if c.id == chat_id), None)
-        title = picked.title if picked else str(chat_id)
-        is_forum = picked.is_forum if picked else False
-
-        session_store.update_data(
-            user_id,
-            destination_chat_id=chat_id,
-            destination_chat_title=title,
-            is_forum=is_forum,
-        )
-
-        # Detect forum supergroup
-        if is_forum:
-            topics = await TopicManager.get_topics(client, chat_id)
-            session_store.update_data(user_id, available_topics=topics)
-            text = (
-                f"✅ *Destination Selected:*\n👥 {title}\n\n"
-                "🧵 *This group has Topics enabled.*\n"
-                "Select a destination topic:"
-            )
-            await query.edit_message_text(
-                text=text,
-                reply_markup=build_topics_keyboard(
-                    topics, can_create=picked.can_manage_topics if picked else True
-                ),
-                parse_mode="Markdown",
-            )
-            return
-
-        # Not a forum: move to Content Filter
-        await _show_content_filter(query, user_id)
-        return
+        if action == "menu":
+            await ChatPicker.show_picker(query, user_id, target)
+        elif action == "search":
+            await ChatPicker.show_search_prompt(query, user_id, target)
+        elif action == "cat":
+            cat = parts[3] if len(parts) > 3 else "all"
+            await ChatPicker.show_category(query, user_id, target, cat, page=0)
+        elif action == "recent":
+            await ChatPicker.show_recent_chats(query, user_id, target, page=0)
+        elif action == "refresh":
+            await ChatPicker.refresh_dialogs(query, user_id, target)
+        elif action == "pg":
+            page = int(parts[3]) if len(parts) > 3 else 0
+            udata = session_store.get_data(user_id)
+            view = udata.get("cp_view", "cat")
+            if view == "search":
+                q = udata.get("cp_query", "")
+                await ChatPicker.handle_search_query(query, user_id, target, q, page=page)
+            elif view == "recent":
+                await ChatPicker.show_recent_chats(query, user_id, target, page=page)
+            else:
+                cat = udata.get("cp_category", "all")
+                await ChatPicker.show_category(query, user_id, target, cat, page=page)
+        elif action == "pk":
+            chat_id = int(parts[3]) if len(parts) > 3 else 0
+            await ChatPicker.handle_pick(query, user_id, target, chat_id)
 
 
 async def _handle_topic_action(query, user_id: int, data: str) -> None:
@@ -527,11 +410,15 @@ async def _handle_topic_action(query, user_id: int, data: str) -> None:
         await _show_content_filter(query, user_id)
         return
 
+    if data == "topic:back":
+        await ChatPicker.show_destination_picker(query, user_id)
+        return
+
     if data == "topic:create":
         session_store.set_state(user_id, BotState.WIZARD_TOPIC_CREATE)
         text = "🆕 *Create New Topic*\n\nPlease send the title for the new topic:"
         kb = InlineKeyboardMarkup(
-            [[InlineKeyboardButton("⬅️ Back", callback_data="dst:back")]]
+            [[InlineKeyboardButton("⬅️ Back", callback_data="cp:dst:menu")]]
         )
         await query.edit_message_text(
             text=text, reply_markup=kb, parse_mode="Markdown"

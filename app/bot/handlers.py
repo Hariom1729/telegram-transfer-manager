@@ -11,6 +11,7 @@ from telegram.ext import (
     filters,
 )
 from app.bot.callbacks import handle_callback_query
+from app.bot.chat_picker import ChatPicker
 from app.bot.keyboards import (
     build_auth_2fa_keyboard,
     build_auth_code_keyboard,
@@ -261,100 +262,37 @@ async def text_message_handler(
         )
         return
 
-    # 4. Source Input (Search or Manual ID)
+    # 4. Source Input (Search or ID)
     elif state == BotState.WIZARD_SOURCE_INPUT:
         account_id = udata.get("account_id")
         client = await user_client_manager.get_client_for_account(account_id)
         if not client:
-            await message.reply_text("❌ Account session unavailable.")
+            await message.reply_text("❌ Telegram account session unavailable.")
             return
 
-        is_ident, chat_val = validate_chat_identifier(text)
-        if is_ident and chat_val:
-            try:
-                resolved = await ChatDiscovery.resolve_chat(client, chat_val)
-                session_store.update_data(
-                    user_id,
-                    source_chat_id=resolved.id,
-                    source_chat_title=resolved.title,
-                )
-                session_store.set_state(user_id, BotState.WIZARD_DEST_SELECT)
-                await message.reply_text(
-                    f"✅ *Source Chat Found:*\n📢 {resolved.title} (`{resolved.id}`)\n\n"
-                    "Now select the *Destination*:",
-                    reply_markup=build_chat_selection_modes_keyboard("dest"),
-                    parse_mode="Markdown",
-                )
-                return
-            except Exception as e:
-                logger.warning("Could not resolve source %s: %s", chat_val, e)
-
-        # Keyword search
-        matches = await ChatDiscovery.search_dialogs(client, text)
-        if not matches:
-            await message.reply_text(
-                f"❌ No chats found matching '{text}'.\nTry another query or send a chat ID:"
-            )
-            return
-
-        session_store.update_data(user_id, discovered_source_chats=matches)
-        await message.reply_text(
-            f"Found {len(matches)} matching sources:",
-            reply_markup=build_chat_list_keyboard(matches, "source", page=0),
+        await ChatPicker.handle_search_query(
+            message_or_query=message,
+            user_id=user_id,
+            target="source",
+            query_text=text,
+            page=0,
         )
         return
 
-    # 5. Destination Input (Search or Manual ID)
+    # 5. Destination Input (Search or ID)
     elif state == BotState.WIZARD_DEST_INPUT:
         account_id = udata.get("account_id")
         client = await user_client_manager.get_client_for_account(account_id)
         if not client:
-            await message.reply_text("❌ Account session unavailable.")
+            await message.reply_text("❌ Telegram account session unavailable.")
             return
 
-        is_ident, chat_val = validate_chat_identifier(text)
-        if is_ident and chat_val:
-            try:
-                resolved = await ChatDiscovery.resolve_chat(client, chat_val)
-                session_store.update_data(
-                    user_id,
-                    destination_chat_id=resolved.id,
-                    destination_chat_title=resolved.title,
-                    is_forum=resolved.is_forum,
-                )
-
-                if resolved.is_forum:
-                    topics = await TopicManager.get_topics(client, resolved.id)
-                    session_store.update_data(user_id, available_topics=topics)
-                    await message.reply_text(
-                        f"✅ *Destination Found:*\n👥 {resolved.title}\n\n"
-                        "🧵 *This group has Topics enabled.*\nSelect a destination topic:",
-                        reply_markup=build_topics_keyboard(topics),
-                        parse_mode="Markdown",
-                    )
-                else:
-                    await message.reply_text(
-                        f"✅ *Destination Found:*\n👥 {resolved.title}\n\n"
-                        "Configure message range:",
-                        reply_markup=build_duplicate_mode_keyboard("skip"),
-                        parse_mode="Markdown",
-                    )
-                return
-            except Exception as e:
-                logger.warning("Could not resolve destination %s: %s", chat_val, e)
-
-        # Keyword search
-        matches = await ChatDiscovery.search_dialogs(client, text)
-        if not matches:
-            await message.reply_text(
-                f"❌ No chats found matching '{text}'.\nTry another query or send a chat ID:"
-            )
-            return
-
-        session_store.update_data(user_id, discovered_dest_chats=matches)
-        await message.reply_text(
-            f"Found {len(matches)} matching destinations:",
-            reply_markup=build_chat_list_keyboard(matches, "dest", page=0),
+        await ChatPicker.handle_search_query(
+            message_or_query=message,
+            user_id=user_id,
+            target="dest",
+            query_text=text,
+            page=0,
         )
         return
 

@@ -57,6 +57,21 @@ async def init_db() -> None:
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
 
+        # Run auto-migration for sqlite database if columns were added
+        if "sqlite" in settings.DATABASE_URL:
+            try:
+                res = await conn.exec_driver_sql("PRAGMA table_info(chats)")
+                existing_cols = [row[1] for row in res.fetchall()]
+                if existing_cols:
+                    if "telegram_account_id" not in existing_cols:
+                        await conn.exec_driver_sql("ALTER TABLE chats ADD COLUMN telegram_account_id INTEGER")
+                    if "is_megagroup" not in existing_cols:
+                        await conn.exec_driver_sql("ALTER TABLE chats ADD COLUMN is_megagroup BOOLEAN DEFAULT 0")
+                    if "last_used_at" not in existing_cols:
+                        await conn.exec_driver_sql("ALTER TABLE chats ADD COLUMN last_used_at DATETIME")
+            except Exception:
+                pass
+
 
 async def close_db() -> None:
     """Close the database engine."""
