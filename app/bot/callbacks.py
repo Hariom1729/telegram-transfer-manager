@@ -615,9 +615,11 @@ async def _handle_range_action(query, user_id: int, data: str) -> None:
         if r_type == "custom":
             session_store.set_state(user_id, BotState.WIZARD_RANGE_INPUT)
             text = (
-                "🔢 *Enter Message ID Range*\n\n"
-                "Send start and end IDs separated by space or hyphen.\n"
-                "Example: `1 50` or `1-50`"
+                "🔢 *Enter Message Range or Quantity*\n\n"
+                "Send any of the following formats:\n"
+                "• **First N from beginning:** `first 5`, `first 10`, or `5`\n"
+                "• **Specific ID range:** `1 50` or `1-50`\n"
+                "• **Last N latest:** `last 20`"
             )
             kb = InlineKeyboardMarkup(
                 [[InlineKeyboardButton("⬅️ Back", callback_data="content:done")]]
@@ -627,8 +629,14 @@ async def _handle_range_action(query, user_id: int, data: str) -> None:
             )
             return
 
-        # Numeric limits: 50, 100, 500, 1000 or all
-        limit = None if r_type == "all" else int(r_type)
+        # Numeric limits: first_5, first_10, 50, 100, 500, 1000 or all
+        if r_type == "all":
+            limit = None
+        elif "_" in r_type:
+            limit = int(r_type.split("_")[-1])
+        else:
+            limit = int(r_type)
+
         session_store.update_data(
             user_id,
             range_type=r_type,

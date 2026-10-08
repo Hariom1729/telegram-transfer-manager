@@ -234,15 +234,19 @@ def build_range_keyboard() -> InlineKeyboardMarkup:
     keyboard = [
         [
             InlineKeyboardButton("All Messages", callback_data="range:pick:all"),
+            InlineKeyboardButton("First 5", callback_data="range:pick:first_5"),
+            InlineKeyboardButton("First 10", callback_data="range:pick:first_10"),
+        ],
+        [
             InlineKeyboardButton("Last 50", callback_data="range:pick:50"),
-        ],
-        [
             InlineKeyboardButton("Last 100", callback_data="range:pick:100"),
-            InlineKeyboardButton("Last 500", callback_data="range:pick:500"),
         ],
         [
+            InlineKeyboardButton("Last 500", callback_data="range:pick:500"),
             InlineKeyboardButton("Last 1000", callback_data="range:pick:1000"),
-            InlineKeyboardButton("Custom Range (ID)", callback_data="range:pick:custom"),
+        ],
+        [
+            InlineKeyboardButton("Custom Range / Count", callback_data="range:pick:custom"),
         ],
         [
             InlineKeyboardButton("⬅️ Back", callback_data="range:back"),

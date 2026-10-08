@@ -353,8 +353,51 @@ async def text_message_handler(
             )
         return
 
-    # 7. Custom Range Input
+    # 7. Custom Range / Quantity Input
     elif state == BotState.WIZARD_RANGE_INPUT:
+        raw_text = text.strip().lower()
+
+        # 1. Check for "first N" or single number "N" (e.g. "first 5", "5")
+        if raw_text.startswith("first ") or (raw_text.isdigit() and int(raw_text) > 0):
+            num_str = raw_text.replace("first", "").strip()
+            if num_str.isdigit() and int(num_str) > 0:
+                count = int(num_str)
+                session_store.update_data(
+                    user_id,
+                    start_message_id=None,
+                    end_message_id=None,
+                    range_type=f"first_{count}",
+                    range_limit=count,
+                )
+                await message.reply_text(
+                    f"✅ Quantity set: First {count} messages (from beginning)\n\n"
+                    "Configure duplicate handling:",
+                    reply_markup=build_duplicate_mode_keyboard("skip"),
+                    parse_mode="Markdown",
+                )
+                return
+
+        # 2. Check for "last N" (e.g. "last 20")
+        if raw_text.startswith("last "):
+            num_str = raw_text.replace("last", "").strip()
+            if num_str.isdigit() and int(num_str) > 0:
+                count = int(num_str)
+                session_store.update_data(
+                    user_id,
+                    start_message_id=None,
+                    end_message_id=None,
+                    range_type=f"last_{count}",
+                    range_limit=count,
+                )
+                await message.reply_text(
+                    f"✅ Quantity set: Last {count} messages (latest)\n\n"
+                    "Configure duplicate handling:",
+                    reply_markup=build_duplicate_mode_keyboard("skip"),
+                    parse_mode="Markdown",
+                )
+                return
+
+        # 3. Check for specific ID range (e.g. "1 50" or "1-50")
         parts = text.replace("-", " ").split()
         if len(parts) >= 2 and parts[0].isdigit() and parts[1].isdigit():
             start_id, end_id = int(parts[0]), int(parts[1])
@@ -368,6 +411,7 @@ async def text_message_handler(
                 start_message_id=start_id,
                 end_message_id=end_id,
                 range_type="custom",
+                range_limit=end_id - start_id + 1,
             )
             await message.reply_text(
                 f"✅ Range set: Messages {start_id} → {end_id}\n\n"
@@ -378,7 +422,11 @@ async def text_message_handler(
             return
         else:
             await message.reply_text(
-                "❌ Invalid format. Please enter two numbers (e.g. `1 155`):"
+                "❌ Invalid format.\n\n"
+                "You can enter:\n"
+                "• **First N from start:** `first 5`, `first 10`, `5`\n"
+                "• **Specific ID range:** `1 50` or `1-50`\n"
+                "• **Last N latest:** `last 20`"
             )
             return
 
