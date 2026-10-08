@@ -302,12 +302,14 @@ class TransferWorker:
                         )
 
                 try:
-                    dest_msg_id = await retry_executor.execute(
-                        operation=do_copy,
-                        job_id=job.id,
-                        message_id=msg.id,
-                    )
-                    tracker.clear_download_progress()
+                    try:
+                        dest_msg_id = await retry_executor.execute(
+                            operation=do_copy,
+                            job_id=job.id,
+                            message_id=msg.id,
+                        )
+                    finally:
+                        tracker.clear_download_progress()
 
                     # Success: record mapping
                     if dest_msg_id:

@@ -318,3 +318,62 @@ async def test_benchmark_download_measures_workers(tmp_path):
     report = result.format_report()
     assert "Download Benchmark Report" in report
     assert "Recommended Workers:" in report
+
+
+@pytest.mark.asyncio
+async def test_non_aligned_file_size_chunk_download(tmp_path):
+    """Verify that file sizes not divisible by chunk_size send full chunk_size limit and finalize correctly."""
+    downloader = FastMediaDownloader()
+    client = MagicMock()
+    client.session.dc_id = 2
+    client._sender = MagicMock()
+
+    chunk_size = 524288
+    # 2 full chunks + 1 partial chunk (e.g. 12,345 bytes remainder)
+    remainder = 12345
+    file_size = (2 * chunk_size) + remainder
+
+    observed_limits = []
+
+    async def mock_call(sender, request):
+        observed_limits.append(request.limit)
+        offset = request.offset
+        if offset + chunk_size <= file_size:
+            return MagicMock(bytes=b"F" * chunk_size)
+        else:
+            return MagicMock(bytes=b"R" * remainder)
+
+    client._call = mock_call
+
+    doc = MagicMock(spec=Document)
+    doc.id = 555
+    doc.access_hash = 666
+    doc.file_reference = b"ref"
+    doc.size = file_size
+    doc.dc_id = 2
+
+    media = MagicMock(spec=MessageMediaDocument)
+    media.document = doc
+
+    msg = MagicMock(spec=Message)
+    msg.id = 103
+    msg.media = media
+
+    target_file = tmp_path / "odd_size_video.mp4"
+    res = await downloader.download_media(
+        client=client,
+        message=msg,
+        target_path=target_file,
+        workers=2,
+        request_size=chunk_size,
+    )
+
+    assert res == str(target_file)
+    assert target_file.exists()
+    assert target_file.stat().st_size == file_size
+
+    # All MTProto GetFileRequests must have requested chunk_size (never a non-divisible remainder)
+    for lim in observed_limits:
+        assert lim == chunk_size
+        assert lim % 4096 == 0
+

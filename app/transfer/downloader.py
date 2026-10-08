@@ -54,6 +54,7 @@ class DownloadProgressInfo:
     eta_seconds: float
     workers: int
     is_resumed: bool
+    is_upload: bool = False
 
     def format_progress_text(self) -> str:
         """Format the Telegram UI text matching Section 15 specification."""
@@ -78,11 +79,14 @@ class DownloadProgressInfo:
         filled = int(pct / 10)
         bar = "█" * filled + "░" * (10 - filled)
 
+        status_header = "📤 Uploading" if self.is_upload else "📥 Downloading"
+        label = "Uploaded" if self.is_upload else "Downloaded"
+
         return (
-            f"📥 Downloading\n\n"
+            f"{status_header}\n\n"
             f"File: {self.file_name}\n"
             f"Size: {size_str}\n"
-            f"Downloaded: {dl_str} / {size_str}\n"
+            f"{label}: {dl_str} / {size_str}\n"
             f"Progress: {pct:.1f}% [{bar}]\n"
             f"Speed: Current: {cur_speed_mb:.1f} MB/s | Avg: {avg_speed_mb:.1f} MB/s\n"
             f"ETA: {eta_str}"
@@ -420,7 +424,9 @@ class FastMediaDownloader:
                     break
 
                 offset = chunk_idx * chunk_size
-                limit = min(chunk_size, file_size - offset)
+                # Telegram MTProto GetFileRequest limit must be divisible by 1024/4096.
+                # Passing the full chunk_size allows Telegram to return remaining file bytes cleanly.
+                limit = chunk_size
                 chunk_retries = 0
 
                 while True:
@@ -434,6 +440,10 @@ class FastMediaDownloader:
                         data = getattr(result, "bytes", None)
                         if not data:
                             raise RuntimeError("Telegram returned empty chunk payload.")
+
+                        # Ensure we do not write beyond file_size if Telegram returned padding
+                        if file_size and (offset + len(data) > file_size):
+                            data = data[: max(0, file_size - offset)]
 
                         # Write to exact offset in file without blocking event loop
                         await asyncio.to_thread(os.pwrite, fd, data, offset)

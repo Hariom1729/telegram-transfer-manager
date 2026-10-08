@@ -288,3 +288,22 @@ async def test_download_to_local_media_and_text(tmp_path):
     assert (out_dir / "msg_102.txt").read_text(encoding="utf-8") == "Important notes here"
 
 
+def test_progress_tracker_completed_skipped_note():
+    """Verify informative note is included when all messages are skipped on completion."""
+    tracker = ProgressTracker(
+        job_id=43,
+        source_title="AI Bootcamp",
+        destination_title="💾 Downloads/AI Bootcamp/",
+        total_messages=5,
+    )
+    tracker.processed_messages = 5
+    tracker.successful_messages = 0
+    tracker.skipped_messages = 5
+    tracker.failed_messages = 0
+
+    msg = tracker.format_status_message(status_label="COMPLETED")
+    assert "All 5 message(s) were skipped because they were already transferred/downloaded" in msg
+    assert "To download new messages:" in msg
+
+
+

@@ -23,7 +23,8 @@ from telethon.tl.types import (
     MessageService,
 )
 
-from app.transfer.downloader import fast_media_downloader
+from app.config import settings
+from app.transfer.downloader import DownloadProgressInfo, fast_media_downloader
 from app.transfer.retry import NonRetryableTransferError
 from app.utils.paths import (
     get_temp_download_directory,
@@ -399,6 +400,43 @@ class MessageCopier:
             if hasattr(message, "document") and message.document:
                 attributes = getattr(message.document, "attributes", None)
 
+            upload_cb = None
+            if download_progress_callback:
+                last_ul_update = [0.0]
+                ul_fname = os.path.basename(downloaded_path)
+
+                async def _on_upload(current: int, total: int):
+                    now = time.perf_counter()
+                    if (
+                        now - last_ul_update[0]
+                        >= getattr(settings, "DOWNLOAD_PROGRESS_INTERVAL", 1.0)
+                    ) or (current >= total):
+                        last_ul_update[0] = now
+                        elapsed = max(0.001, now - t_ul_start)
+                        spd = current / elapsed
+                        rem = max(0, total - current)
+                        eta = (rem / spd) if spd > 0 else 0.0
+                        pct = (current / total * 100.0) if total > 0 else 0.0
+                        up_info = DownloadProgressInfo(
+                            file_name=ul_fname,
+                            file_size=total,
+                            downloaded_bytes=current,
+                            percent=pct,
+                            current_speed=spd,
+                            average_speed=spd,
+                            peak_speed=spd,
+                            eta_seconds=eta,
+                            workers=1,
+                            is_resumed=False,
+                            is_upload=True,
+                        )
+                        try:
+                            await download_progress_callback(up_info)
+                        except Exception:
+                            pass
+
+                upload_cb = _on_upload
+
             sent = await client.send_file(
                 entity=destination_entity,
                 file=downloaded_path,
@@ -407,6 +445,7 @@ class MessageCopier:
                 reply_to=reply_to,
                 attributes=attributes,
                 supports_streaming=bool(getattr(message, "video", None)),
+                progress_callback=upload_cb,
             )
             t_ul_end = time.perf_counter()
             ul_time = max(0.001, t_ul_end - t_ul_start)

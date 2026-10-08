@@ -100,6 +100,16 @@ class ProgressTracker:
             f"❌ Failed: {self.failed_messages:,}\n\n"
             f"Speed: {speed_str}"
         )
+        if status_label == "COMPLETED":
+            if self.skipped_messages > 0 and self.successful_messages == 0:
+                text += (
+                    f"\n\n💡 *Note:* All {self.skipped_messages} message(s) were skipped because they were already transferred/downloaded earlier (duplicate protection) or were non-media service messages.\n"
+                    f"👉 *To download new messages:* specify the next range (e.g. `6 15` or `6-20`).\n"
+                    f"👉 *To re-download previous messages:* choose *🔄 Transfer again* on the duplicate handling screen."
+                )
+            elif self.skipped_messages > 0:
+                text += f"\n\n💡 *Note:* {self.skipped_messages} message(s) skipped (already transferred or filtered)."
+
         if self.current_download_info:
             info = self.current_download_info
             size_mb = info.file_size / (1024 * 1024)
@@ -122,11 +132,14 @@ class ProgressTracker:
             filled = int(pct / 10)
             bar = "█" * filled + "░" * (10 - filled)
 
+            status_header = "📤 *Uploading*" if getattr(info, "is_upload", False) else "📥 *Downloading*"
+            label = "Uploaded" if getattr(info, "is_upload", False) else "Downloaded"
+
             text += (
-                f"\n\n📥 *Downloading*\n"
+                f"\n\n{status_header}\n"
                 f"File: `{info.file_name}`\n"
                 f"Size: {size_str}\n"
-                f"Downloaded: {dl_str} / {size_str}\n"
+                f"{label}: {dl_str} / {size_str}\n"
                 f"Progress: {pct:.1f}% [{bar}]\n"
                 f"Speed: {cur_spd:.1f} MB/s (Avg: {avg_spd:.1f} MB/s)\n"
                 f"ETA: {eta_str}"
