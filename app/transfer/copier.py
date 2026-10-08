@@ -25,6 +25,7 @@ from telethon.tl.types import (
 
 from app.config import settings
 from app.transfer.downloader import DownloadProgressInfo, fast_media_downloader
+from app.transfer.uploader import fast_media_uploader
 from app.transfer.retry import NonRetryableTransferError
 from app.utils.paths import (
     get_temp_download_directory,
@@ -350,9 +351,10 @@ class MessageCopier:
         # Stream download media chunks into a file-backed OS temporary location to protect RAM,
         # upload cleanly to destination, and clean up temporary storage in finally block.
         temp_dir = get_temp_download_directory()
-        msg_chat_id = getattr(message, "chat_id", 0)
-        temp_path = temp_dir / f"stream_{msg_chat_id}_{message.id}_{uuid.uuid4().hex[:8]}"
+        safe_name = cls.get_suggested_filename(message)
+        temp_path = temp_dir / f"{uuid.uuid4().hex[:8]}_{safe_name}"
         downloaded_path = None
+        thumb_path = None
 
         try:
             t_dl_start = time.perf_counter()
@@ -394,58 +396,84 @@ class MessageCopier:
             dl_time = max(0.001, t_dl_end - t_dl_start)
             dl_speed = file_size / dl_time
 
-            # Upload freshly downloaded media file from disk
+            # 3a. Classify media type to preserve exact format as in source channel
+            is_video = bool(getattr(message, "video", None)) or (
+                hasattr(message, "document")
+                and message.document
+                and any(
+                    isinstance(a, DocumentAttributeVideo)
+                    for a in getattr(message.document, "attributes", [])
+                )
+            )
+            is_photo = bool(getattr(message, "photo", None)) or isinstance(
+                getattr(message, "media", None), MessageMediaPhoto
+            )
+            is_voice = bool(getattr(message, "voice", None))
+            is_video_note = bool(getattr(message, "video_note", None))
+            is_audio = bool(getattr(message, "audio", None))
+
+            # Preserve original MIME type
+            mime_type = None
+            if hasattr(message, "document") and message.document and getattr(message.document, "mime_type", None):
+                mime_type = message.document.mime_type
+            elif is_video:
+                mime_type = "video/mp4"
+            elif is_photo:
+                mime_type = "image/jpeg"
+            elif is_voice:
+                mime_type = "audio/ogg"
+
+            # Download and preserve original video/document thumbnail for native preview
+            if hasattr(message, "document") and message.document and getattr(message.document, "thumbs", None):
+                thumb_candidate = temp_dir / f"thumb_{uuid.uuid4().hex[:8]}.jpg"
+                try:
+                    await client.download_media(message, file=str(thumb_candidate), thumb=-1)
+                    if thumb_candidate.exists() and thumb_candidate.stat().st_size > 0:
+                        thumb_path = thumb_candidate
+                except Exception as te:
+                    logger.debug("Could not extract thumbnail for message %s: %s", message.id, te)
+
+            # Preserve and enrich attributes
+            attributes = []
+            if hasattr(message, "document") and message.document and getattr(message.document, "attributes", None):
+                attributes = list(message.document.attributes)
+
+            if is_video:
+                has_vid_attr = False
+                for a in attributes:
+                    if isinstance(a, DocumentAttributeVideo):
+                        a.supports_streaming = True
+                        has_vid_attr = True
+                if not has_vid_attr:
+                    attributes.append(DocumentAttributeVideo(duration=0, w=1, h=1, supports_streaming=True))
+
+            # Only force document if the original message was truly an unplayable raw file attachment
+            force_doc = not (is_video or is_photo or is_voice or is_video_note or is_audio)
+
+            # 3b. High-speed multi-worker MTProto parallel upload
             t_ul_start = time.perf_counter()
-            attributes = None
-            if hasattr(message, "document") and message.document:
-                attributes = getattr(message.document, "attributes", None)
+            uploaded_handle = await fast_media_uploader.upload_file(
+                client=client,
+                file_path=downloaded_path,
+                file_name=safe_name,
+                progress_callback=download_progress_callback,
+                job_id=job_id,
+            )
 
-            upload_cb = None
-            if download_progress_callback:
-                last_ul_update = [0.0]
-                ul_fname = os.path.basename(downloaded_path)
-
-                async def _on_upload(current: int, total: int):
-                    now = time.perf_counter()
-                    if (
-                        now - last_ul_update[0]
-                        >= getattr(settings, "DOWNLOAD_PROGRESS_INTERVAL", 1.0)
-                    ) or (current >= total):
-                        last_ul_update[0] = now
-                        elapsed = max(0.001, now - t_ul_start)
-                        spd = current / elapsed
-                        rem = max(0, total - current)
-                        eta = (rem / spd) if spd > 0 else 0.0
-                        pct = (current / total * 100.0) if total > 0 else 0.0
-                        up_info = DownloadProgressInfo(
-                            file_name=ul_fname,
-                            file_size=total,
-                            downloaded_bytes=current,
-                            percent=pct,
-                            current_speed=spd,
-                            average_speed=spd,
-                            peak_speed=spd,
-                            eta_seconds=eta,
-                            workers=1,
-                            is_resumed=False,
-                            is_upload=True,
-                        )
-                        try:
-                            await download_progress_callback(up_info)
-                        except Exception:
-                            pass
-
-                upload_cb = _on_upload
-
+            # 3c. Send media with 100% preserved type, streaming flags, and thumbnail
             sent = await client.send_file(
                 entity=destination_entity,
-                file=downloaded_path,
+                file=uploaded_handle,
                 caption=caption,
                 formatting_entities=message.entities,
                 reply_to=reply_to,
                 attributes=attributes,
-                supports_streaming=bool(getattr(message, "video", None)),
-                progress_callback=upload_cb,
+                thumb=str(thumb_path) if thumb_path else None,
+                supports_streaming=is_video,
+                force_document=force_doc,
+                voice_note=is_voice,
+                video_note=is_video_note,
+                mime_type=mime_type,
             )
             t_ul_end = time.perf_counter()
             ul_time = max(0.001, t_ul_end - t_ul_start)
@@ -475,6 +503,7 @@ class MessageCopier:
                 temp_path.with_name(f"{temp_path.name}.part"),
                 temp_path.with_name(f"{temp_path.name}.part.json"),
                 Path(downloaded_path) if downloaded_path else None,
+                thumb_path,
             ):
                 if p and p.exists():
                     try:

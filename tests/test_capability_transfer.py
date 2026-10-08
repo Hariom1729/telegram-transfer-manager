@@ -6,6 +6,7 @@ from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+from telethon import types
 from telethon.tl.custom.message import Message
 from telethon.tl.types import Channel, DocumentAttributeVideo, MessageMediaDocument
 
@@ -133,12 +134,12 @@ async def test_restricted_video_skips_native_and_uses_download_upload(tmp_path):
     # send_file was called once (for the upload of the downloaded file)
     assert client.send_file.call_count == 1
     upload_call_kwargs = client.send_file.call_args.kwargs
-    # Verified: sent the local file on disk, not the original restricted media reference
-    assert isinstance(upload_call_kwargs["file"], str)
+    # Verified: sent the uploaded handle/file, not the original restricted media reference
+    assert isinstance(upload_call_kwargs["file"], (str, types.InputFile, types.InputFileBig))
     assert upload_call_kwargs["supports_streaming"] is True
 
     # Temp files cleaned up
-    remaining = list(tmp_path.glob("stream_*"))
+    remaining = [p for p in tmp_path.iterdir() if p.is_file()]
     assert len(remaining) == 0
 
     # Diagnostics recorded
@@ -204,7 +205,7 @@ async def test_native_forward_rejected_falls_back_to_download_upload(tmp_path):
     assert diag.file_size == 50000
 
     # Temp files cleaned up
-    remaining = list(tmp_path.glob("stream_*"))
+    remaining = [p for p in tmp_path.iterdir() if p.is_file()]
     assert len(remaining) == 0
 
 
@@ -236,7 +237,7 @@ async def test_inaccessible_media_raises_non_retryable_clear_error(tmp_path):
 
     assert "Telegram did not make the media available to this account." in str(exc_info.value)
     # Verify temp files cleaned up even on failure
-    remaining = list(tmp_path.glob("stream_*"))
+    remaining = [p for p in tmp_path.iterdir() if p.is_file()]
     assert len(remaining) == 0
 
 

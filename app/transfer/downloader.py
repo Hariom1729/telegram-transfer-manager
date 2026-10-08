@@ -484,7 +484,7 @@ class FastMediaDownloader:
                                 is_resumed=is_resumed,
                             )
                             try:
-                                await progress_callback(prog_info)
+                                asyncio.create_task(progress_callback(prog_info))
                             except Exception as pe:
                                 logger.debug("Progress callback failed: %s", pe)
 

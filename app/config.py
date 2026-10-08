@@ -56,8 +56,9 @@ class Settings:
         os.getenv("PROGRESS_UPDATE_INTERVAL", "3").strip()
     )
 
-    # Optimized Media Downloader Settings
-    DOWNLOAD_WORKERS: int = int(os.getenv("DOWNLOAD_WORKERS", "4").strip())
+    # Optimized Media Downloader & Uploader Settings
+    DOWNLOAD_WORKERS: int = int(os.getenv("DOWNLOAD_WORKERS", "8").strip())
+    UPLOAD_WORKERS: int = int(os.getenv("UPLOAD_WORKERS", "4").strip())
     DOWNLOAD_REQUEST_SIZE: int = int(
         os.getenv("DOWNLOAD_REQUEST_SIZE", "524288").strip()
     )

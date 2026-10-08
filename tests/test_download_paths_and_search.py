@@ -102,8 +102,8 @@ async def test_transfer_temporary_files_are_cleaned_up(tmp_path):
         res_id = await MessageCopier.copy_message(client, destination_entity=-100222, message=msg)
         assert res_id == 999
 
-    # Verify no stream files remain in the temp directory
-    remaining = list(tmp_path.glob("stream_*"))
+    # Verify no temporary files remain in the temp directory
+    remaining = [p for p in tmp_path.iterdir() if p.is_file()]
     assert len(remaining) == 0
 
 
