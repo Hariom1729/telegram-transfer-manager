@@ -1,0 +1,6 @@
+python-telegram-bot>=22.0
+Telethon>=1.36.0
+SQLAlchemy>=2.0.0
+aiosqlite>=0.20.0
+greenlet>=3.0.0
+python-dotenv>=1.0.0
