@@ -36,6 +36,9 @@ class BotState:
     SYNC_DEST_SELECT = "SYNC_DEST_SELECT"
     SYNC_TOPIC_SELECT = "SYNC_TOPIC_SELECT"
 
+    # Cleaning & duplicate removal states
+    CLEAN_RANGE_INPUT = "CLEAN_RANGE_INPUT"
+
 
 class UserSessionStore:
     """In-memory session state store for user interactions."""

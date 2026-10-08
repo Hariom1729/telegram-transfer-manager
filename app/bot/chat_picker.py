@@ -757,6 +757,17 @@ class ChatPicker:
                 await _show_content_filter(query, user_id)
                 return
 
+            if udata.get("is_cleaning_mode"):
+                session_store.update_data(
+                    user_id,
+                    clean_chat_id=picked.id,
+                    clean_chat_title=picked.title,
+                )
+                from app.transfer.cleaner import show_clean_menu
+
+                await show_clean_menu(query, user_id, picked.id, picked.title)
+                return
+
             session_store.update_data(
                 user_id,
                 source_chat_id=picked.id,

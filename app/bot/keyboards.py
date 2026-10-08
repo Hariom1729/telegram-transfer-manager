@@ -20,10 +20,13 @@ def build_main_menu_keyboard() -> InlineKeyboardMarkup:
         ],
         [
             InlineKeyboardButton("🔗 Connected Accounts", callback_data="nav:accounts"),
-            InlineKeyboardButton("🔄 Live Sync", callback_data="nav:live_sync"),
+            InlineKeyboardButton("🧹 Clean / Dedup", callback_data="nav:clean"),
         ],
         [
+            InlineKeyboardButton("🔄 Live Sync", callback_data="nav:live_sync"),
             InlineKeyboardButton("⚙️ Settings", callback_data="nav:settings"),
+        ],
+        [
             InlineKeyboardButton("ℹ️ Help", callback_data="nav:help"),
         ],
     ]

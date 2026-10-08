@@ -376,7 +376,62 @@ async def handle_callback_query(
             )
         return
 
+    elif data == "nav:clean":
+        accounts = await user_client_manager.list_user_accounts(user_id)
+        if not accounts:
+            text = (
+                "⚠️ *No Connected Telegram Accounts*\n\n"
+                "To clean channels or remove duplicates, you must first connect your Telegram account."
+            )
+            kb = InlineKeyboardMarkup(
+                [
+                    [
+                        InlineKeyboardButton(
+                            "➕ Connect Account", callback_data="acc:connect"
+                        )
+                    ],
+                    [InlineKeyboardButton("🏠 Home", callback_data="nav:home")],
+                ]
+            )
+            await query.edit_message_text(
+                text=text, reply_markup=kb, parse_mode="Markdown"
+            )
+            return
+
+        session_store.clear(user_id)
+        session_store.update_data(user_id, is_cleaning_mode=True)
+        if len(accounts) == 1:
+            session_store.update_data(user_id, account_id=accounts[0].id)
+            await ChatPicker.show_source_picker(query, user_id)
+        else:
+            text = "👤 *Select Telegram Account* to use for channel cleaning:"
+            buttons = [
+                [
+                    InlineKeyboardButton(
+                        f"👤 {acc.first_name or acc.username or acc.phone_number}",
+                        callback_data=f"wizard:acc:{acc.id}",
+                    )
+                ]
+                for acc in accounts
+            ]
+            buttons.append(
+                [InlineKeyboardButton("❌ Cancel", callback_data="nav:cancel")]
+            )
+            await query.edit_message_text(
+                text=text,
+                reply_markup=InlineKeyboardMarkup(buttons),
+                parse_mode="Markdown",
+            )
+        return
+
+    elif data.startswith("clean:"):
+        from app.transfer.cleaner import handle_clean_callback
+
+        await handle_clean_callback(update, user_id, data)
+        return
+
     elif data.startswith("wizard:acc:"):
+
         acc_id = int(data.split(":")[-1])
         session_store.update_data(user_id, account_id=acc_id)
         await ChatPicker.show_source_picker(query, user_id)

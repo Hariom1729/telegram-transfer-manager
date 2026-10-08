@@ -70,8 +70,11 @@ BOT_COMMANDS: List[BotCommand] = [
     BotCommand("download", "Download media"),
     BotCommand("speedtest", "Test transfer speed"),
     BotCommand("settings", "Settings"),
+    BotCommand("clean", "Clean channel & remove duplicates"),
+    BotCommand("dedup", "Scan & remove duplicate media"),
     BotCommand("health", "System health & uptime"),
 ]
+
 
 
 async def setup_bot_commands(application: Application) -> None:
@@ -161,6 +164,7 @@ async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "• /download - Download media to local Downloads folder\n"
         "• /speedtest - Run MTProto transfer speed benchmark\n"
         "• /settings - View transfer settings and configuration\n"
+        "• /clean (`/dedup`) - Clean channel & remove duplicate media/messages\n"
         "• /health - System health, uptime & cloud status\n\n"
         "💡 *Tip:* Commands can be typed directly or selected from Telegram's `/` menu."
     )
@@ -429,8 +433,67 @@ async def cmd_transfer(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 
 
 # =============================================================================
+# 4b. Clean / Dedup Commands (/clean, /dedup)
+# =============================================================================
+
+@check_authorized
+async def cmd_clean(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Start the Channel Cleaning & Duplicate Removal workflow."""
+    user_id = update.effective_user.id
+    accounts = await user_client_manager.list_user_accounts(user_id)
+    if not accounts:
+        text = (
+            "⚠️ *No Connected Telegram Accounts*\n\n"
+            "To clean channels or remove duplicates, you must first connect your Telegram account."
+        )
+        kb = InlineKeyboardMarkup(
+            [
+                [InlineKeyboardButton("➕ Connect Account", callback_data="acc:connect")],
+                [InlineKeyboardButton("🏠 Home", callback_data="nav:home")],
+            ]
+        )
+        if update.effective_message:
+            await update.effective_message.reply_text(
+                text=text, reply_markup=kb, parse_mode="Markdown"
+            )
+        return
+
+    await _reset_user_transient_state(user_id)
+    session_store.update_data(user_id, is_cleaning_mode=True)
+    if len(accounts) == 1:
+        session_store.update_data(user_id, account_id=accounts[0].id)
+        if update.effective_message:
+            await ChatPicker.show_source_picker(update.effective_message, user_id)
+    else:
+        text = "👤 *Select Telegram Account* to use for channel cleaning:"
+        buttons = [
+            [
+                InlineKeyboardButton(
+                    f"👤 {acc.first_name or acc.username or acc.phone_number}",
+                    callback_data=f"wizard:acc:{acc.id}",
+                )
+            ]
+            for acc in accounts
+        ]
+        buttons.append([InlineKeyboardButton("❌ Cancel", callback_data="nav:cancel")])
+        if update.effective_message:
+            await update.effective_message.reply_text(
+                text=text,
+                reply_markup=InlineKeyboardMarkup(buttons),
+                parse_mode="Markdown",
+            )
+
+
+@check_authorized
+async def cmd_dedup(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Alias for /clean to scan and remove duplicates."""
+    await cmd_clean(update, context)
+
+
+# =============================================================================
 # 5. Status Command (/status, /st)
 # =============================================================================
+
 
 @check_authorized
 async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -1027,6 +1090,7 @@ def register_command_handlers(app: Application) -> None:
     app.add_handler(CommandHandler("download", cmd_download))
     app.add_handler(CommandHandler("speedtest", cmd_speedtest))
     app.add_handler(CommandHandler("settings", cmd_settings))
+    app.add_handler(CommandHandler(["clean", "dedup"], cmd_clean))
     app.add_handler(CommandHandler("health", cmd_health))
 
     # Callbacks specific to command flows

@@ -118,11 +118,12 @@ async def test_setup_bot_commands_registers_all_commands_and_menu_button():
     expected_commands = [
         "start", "help", "menu", "accounts", "chats", "search",
         "transfer", "status", "history", "pause", "resume", "cancel",
-        "download", "speedtest", "settings", "health",
+        "download", "speedtest", "settings", "clean", "dedup", "health",
     ]
     for expected in expected_commands:
         assert expected in command_names, f"Missing command: {expected}"
-    assert len(cmds) == 16
+    assert len(cmds) == 18
+
 
 
 @pytest.mark.asyncio

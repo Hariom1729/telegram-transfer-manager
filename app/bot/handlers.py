@@ -450,8 +450,55 @@ async def text_message_handler(
             )
             return
 
+    # 8. Clean Range Input (for purging messages by range)
+    elif state == BotState.CLEAN_RANGE_INPUT:
+        parts = text.replace("-", " ").split()
+        if len(parts) >= 2 and parts[0].isdigit() and parts[1].isdigit():
+            start_id, end_id = int(parts[0]), int(parts[1])
+            is_valid, err = validate_message_range(start_id, end_id)
+            if not is_valid:
+                await message.reply_text(f"❌ {err}\nPlease try again:")
+                return
+
+            chat_id = udata.get("clean_chat_id")
+            chat_title = udata.get("clean_chat_title") or str(chat_id)
+
+            message_ids = list(range(start_id, end_id + 1))
+            session_store.update_data(
+                user_id,
+                pending_delete_ids=message_ids,
+            )
+            count = len(message_ids)
+            confirm_text = (
+                f"⚠️ *Confirm Range Purge*\n\n"
+                f"• *Chat:* {chat_title}\n"
+                f"• *Range:* Messages {start_id} to {end_id} ({count} messages)\n\n"
+                f"Are you sure you want to permanently delete these messages?"
+            )
+            kb = InlineKeyboardMarkup(
+                [
+                    [
+                        InlineKeyboardButton(
+                            f"💥 Yes, Delete {count} Messages",
+                            callback_data=f"clean:exec_range:{chat_id}",
+                        )
+                    ],
+                    [InlineKeyboardButton("❌ Cancel", callback_data="nav:home")],
+                ]
+            )
+            await message.reply_text(confirm_text, reply_markup=kb, parse_mode="Markdown")
+            return
+        else:
+            await message.reply_text(
+                "❌ Invalid range format.\n\n"
+                "Please enter start and end IDs, e.g. `1 50` or `1-50`.\n"
+                "Send /cancel to abort."
+            )
+            return
+
     # Default idle fallback: Single message forwarding workflow (Section 25)
     await _prompt_single_message_forward(message, user_id)
+
 
 
 @check_authorized
