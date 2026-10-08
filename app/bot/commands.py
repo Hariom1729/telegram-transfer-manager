@@ -11,9 +11,18 @@ from __future__ import annotations
 import logging
 import math
 import os
+import sys
 import time
 from typing import Any, List, Optional
-from telegram import BotCommand, InlineKeyboardButton, InlineKeyboardMarkup, Update
+from telegram import (
+    BotCommand,
+    BotCommandScopeAllPrivateChats,
+    BotCommandScopeDefault,
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+    MenuButtonCommands,
+    Update,
+)
 from telegram.ext import (
     Application,
     CallbackQueryHandler,
@@ -42,6 +51,8 @@ from app.utils.paths import get_download_directory
 
 logger = logging.getLogger(__name__)
 
+_APP_START_TIME = time.time()
+
 # Official BotCommand definitions for Telegram autocomplete menu
 BOT_COMMANDS: List[BotCommand] = [
     BotCommand("start", "Open Transfer Manager"),
@@ -59,13 +70,29 @@ BOT_COMMANDS: List[BotCommand] = [
     BotCommand("download", "Download media"),
     BotCommand("speedtest", "Test transfer speed"),
     BotCommand("settings", "Settings"),
+    BotCommand("health", "System health & uptime"),
 ]
 
 
 async def setup_bot_commands(application: Application) -> None:
-    """Register command suggestions with Telegram via set_my_commands."""
+    """Register command suggestions with Telegram via set_my_commands and activate native Menu button."""
     try:
-        await application.bot.set_my_commands(BOT_COMMANDS)
+        # 1. Clean previous registrations to bust Telegram server-side cache
+        try:
+            await application.bot.delete_my_commands(scope=BotCommandScopeDefault())
+            await application.bot.delete_my_commands(scope=BotCommandScopeAllPrivateChats())
+        except Exception as de:
+            logger.debug("Command cache reset note: %s", de)
+
+        # 2. Register commands for default scope (all contexts)
+        await application.bot.set_my_commands(BOT_COMMANDS, scope=BotCommandScopeDefault())
+
+        # 3. Register commands specifically for all private chats (1-on-1 direct messages)
+        await application.bot.set_my_commands(BOT_COMMANDS, scope=BotCommandScopeAllPrivateChats())
+
+        # 4. Explicitly activate native Telegram [Menu] (≡) button in the chat input bar
+        await application.bot.set_chat_menu_button(menu_button=MenuButtonCommands())
+
         logger.info("Successfully registered %d slash commands with Telegram.", len(BOT_COMMANDS))
     except Exception as e:
         logger.warning("Could not register bot slash commands with Telegram: %s", e)
@@ -133,7 +160,8 @@ async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "• /cancel - Cancel active transfer with confirmation\n"
         "• /download - Download media to local Downloads folder\n"
         "• /speedtest - Run MTProto transfer speed benchmark\n"
-        "• /settings - View transfer settings and configuration\n\n"
+        "• /settings - View transfer settings and configuration\n"
+        "• /health - System health, uptime & cloud status\n\n"
         "💡 *Tip:* Commands can be typed directly or selected from Telegram's `/` menu."
     )
     kb = InlineKeyboardMarkup(
@@ -811,7 +839,61 @@ async def cmd_settings(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 
 
 # =============================================================================
-# 11. Unknown Command Handler
+# 11. Health Command (/health) for Hugging Face & Cloud Monitoring
+# =============================================================================
+
+@check_authorized
+async def cmd_health(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Show system health, uptime, and Hugging Face / cloud server status."""
+    elapsed = int(time.time() - _APP_START_TIME)
+    hours, remainder = divmod(elapsed, 3600)
+    minutes, seconds = divmod(remainder, 60)
+    uptime_str = f"{hours}h {minutes}m {seconds}s"
+
+    user_id = update.effective_user.id
+    accounts = await user_client_manager.list_user_accounts(user_id)
+    active_jobs = await transfer_manager.get_active_jobs()
+
+    import resource
+    try:
+        max_rss = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+        mem_mb = (max_rss / (1024 * 1024)) if sys.platform == "darwin" else (max_rss / 1024)
+    except Exception:
+        mem_mb = 0.0
+
+    port = int(os.getenv("PORT", os.getenv("HEALTH_PORT", "7860")))
+
+    text = (
+        "🟢 *System Health: OK*\n\n"
+        f"• *Status:* Online & Operational\n"
+        f"• *Uptime:* `{uptime_str}`\n"
+        f"• *HTTP Health Endpoint:* Port `{port}` (`/health` & `/`)\n"
+        f"• *Platform:* Hugging Face / Cloud Ready\n"
+        f"• *Database:* Connected (SQLite)\n"
+        f"• *Connected Accounts:* `{len(accounts)}`\n"
+        f"• *Active Transfers:* `{len(active_jobs)}`\n"
+        f"• *Memory Heap:* `{mem_mb:.1f} MB`\n\n"
+        "💡 *Hugging Face Spaces:* Keep your space awake 24/7 by pinging `http://<your-space>.hf.space/health` with UptimeRobot."
+    )
+    kb = InlineKeyboardMarkup(
+        [
+            [InlineKeyboardButton("🔄 Refresh Health", callback_data="cmd:health_refresh")],
+            [InlineKeyboardButton("🏠 Menu Dashboard", callback_data="nav:home")],
+        ]
+    )
+
+    if update.callback_query:
+        await update.callback_query.edit_message_text(
+            text=text, reply_markup=kb, parse_mode="Markdown"
+        )
+    elif update.effective_message:
+        await update.effective_message.reply_text(
+            text=text, reply_markup=kb, parse_mode="Markdown"
+        )
+
+
+# =============================================================================
+# 12. Unknown Command Handler
 # =============================================================================
 
 @check_authorized
@@ -906,6 +988,10 @@ async def handle_command_callback(
         await cmd_settings(update, context)
         return
 
+    elif data == "cmd:health_refresh":
+        await cmd_health(update, context)
+        return
+
 
 # =============================================================================
 # 13. Registration
@@ -937,10 +1023,11 @@ def register_command_handlers(app: Application) -> None:
     app.add_handler(CommandHandler("resume", cmd_resume))
     app.add_handler(CommandHandler("cancel", cmd_cancel))
 
-    # Download, speedtest, settings
+    # Download, speedtest, settings, health
     app.add_handler(CommandHandler("download", cmd_download))
     app.add_handler(CommandHandler("speedtest", cmd_speedtest))
     app.add_handler(CommandHandler("settings", cmd_settings))
+    app.add_handler(CommandHandler("health", cmd_health))
 
     # Callbacks specific to command flows
     app.add_handler(

@@ -16,6 +16,7 @@ from app.bot.commands import (
     cmd_connect,
     cmd_disconnect,
     cmd_download,
+    cmd_health,
     cmd_help,
     cmd_history,
     cmd_menu,
@@ -100,24 +101,28 @@ def make_mock_update(user_id: int = 12345, text: str = "/start", args=None) -> t
 
 
 @pytest.mark.asyncio
-async def test_setup_bot_commands_registers_all_15_commands():
-    """Verify setup_bot_commands invokes set_my_commands with all required 15 commands."""
+async def test_setup_bot_commands_registers_all_commands_and_menu_button():
+    """Verify setup_bot_commands invokes set_my_commands with all 16 commands, scopes, and menu button."""
     app = MagicMock()
     app.bot.set_my_commands = AsyncMock()
+    app.bot.delete_my_commands = AsyncMock()
+    app.bot.set_chat_menu_button = AsyncMock()
 
     await setup_bot_commands(app)
-    app.bot.set_my_commands.assert_called_once()
-    cmds: list[BotCommand] = app.bot.set_my_commands.call_args[0][0]
+    # Called for default scope and private chats scope
+    assert app.bot.set_my_commands.call_count == 2
+    app.bot.set_chat_menu_button.assert_called_once()
 
+    cmds: list[BotCommand] = app.bot.set_my_commands.call_args[0][0]
     command_names = [c.command for c in cmds]
     expected_commands = [
         "start", "help", "menu", "accounts", "chats", "search",
         "transfer", "status", "history", "pause", "resume", "cancel",
-        "download", "speedtest", "settings",
+        "download", "speedtest", "settings", "health",
     ]
     for expected in expected_commands:
         assert expected in command_names, f"Missing command: {expected}"
-    assert len(cmds) == 15
+    assert len(cmds) == 16
 
 
 @pytest.mark.asyncio
@@ -439,3 +444,20 @@ async def test_menu_during_active_workflow_clears_state_safely():
 
     assert session_store.get_state(12345) == BotState.IDLE
     assert len(session_store.get_data(12345)) == 0
+
+
+@pytest.mark.asyncio
+async def test_cmd_health_reports_status_and_hugging_face_port():
+    """Verify /health displays system uptime, operational status, and port 7860."""
+    update, context = make_mock_update(user_id=12345, text="/health")
+
+    with patch("app.bot.commands.user_client_manager.list_user_accounts", AsyncMock(return_value=[])):
+        await cmd_health(update, context)
+
+    text = update.effective_message.reply_text.call_args.kwargs["text"]
+    assert "System Health: OK" in text
+    assert "*Status:* Online & Operational" in text
+    assert "*HTTP Health Endpoint:*" in text
+    assert "7860" in text
+    assert "Hugging Face Spaces:" in text
+

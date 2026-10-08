@@ -9,6 +9,7 @@ from app.bot.commands import setup_bot_commands
 from app.bot.handlers import register_handlers
 from app.config import settings
 from app.database import close_db, init_db
+from app.health_server import start_health_server, stop_health_server
 from app.logging_config import setup_logging
 from app.telegram.user_client import user_client_manager
 from app.transfer.manager import transfer_manager
@@ -39,6 +40,9 @@ async def main() -> None:
     # 4. Start transfer engine and recovery
     logger.info("Starting Transfer Engine and recovering interrupted jobs...")
     await transfer_manager.start()
+
+    # 4b. Start lightweight HTTP health server for Hugging Face Spaces port 7860
+    await start_health_server()
 
     # 5. Build python-telegram-bot application
     logger.info("Building Telegram Bot interface...")
@@ -99,6 +103,10 @@ async def main() -> None:
 
     logger.info("Closing database engine...")
     await close_db()
+
+    logger.info("Stopping HTTP health server...")
+    await stop_health_server()
+
     logger.info("Telegram Transfer Manager shutdown complete.")
 
 
