@@ -56,6 +56,23 @@ class Settings:
         os.getenv("PROGRESS_UPDATE_INTERVAL", "3").strip()
     )
 
+    # Optimized Media Downloader Settings
+    DOWNLOAD_WORKERS: int = int(os.getenv("DOWNLOAD_WORKERS", "4").strip())
+    DOWNLOAD_REQUEST_SIZE: int = int(
+        os.getenv("DOWNLOAD_REQUEST_SIZE", "524288").strip()
+    )
+    MAX_DOWNLOAD_RETRIES: int = int(
+        os.getenv("MAX_DOWNLOAD_RETRIES", "5").strip()
+    )
+    DOWNLOAD_PROGRESS_INTERVAL: int = int(
+        os.getenv("DOWNLOAD_PROGRESS_INTERVAL", "3").strip()
+    )
+    DOWNLOAD_RESUME: bool = os.getenv("DOWNLOAD_RESUME", "true").strip().lower() in (
+        "true",
+        "1",
+        "yes",
+    )
+
     # Session Storage (Always absolute path anchored to PROJECT_ROOT)
     _raw_session_dir = os.getenv("SESSION_DIRECTORY", "./data/sessions").strip()
     _session_p = Path(_raw_session_dir)
@@ -107,6 +124,21 @@ class Settings:
         diag_logger.info("User Downloads directory: %s (writable: %s)", dl_dir, os.access(dl_dir, os.W_OK))
         diag_logger.info("Temporary files directory: %s (writable: %s)", tmp_dir, os.access(tmp_dir, os.W_OK))
 
+        # Crypto acceleration check
+        try:
+            import cryptg  # noqa: F401
+            diag_logger.info("Telethon crypto acceleration: ENABLED")
+        except ImportError:
+            diag_logger.info("Telethon crypto acceleration: DISABLED")
+
+        diag_logger.info(
+            "Download settings: workers=%d, request_size=%d bytes, max_retries=%d, resume=%s",
+            cls.DOWNLOAD_WORKERS,
+            cls.DOWNLOAD_REQUEST_SIZE,
+            cls.MAX_DOWNLOAD_RETRIES,
+            cls.DOWNLOAD_RESUME,
+        )
+
         if "sqlite" in cls.DATABASE_URL:
             db_part = cls.DATABASE_URL.split(":///")[-1]
             if db_part and not db_part.startswith(":memory:"):
@@ -133,6 +165,23 @@ class Settings:
             raise ValueError(
                 "BOT_TOKEN is missing! Set it in your environment or .env file."
             )
+
+        # Validate & normalize download workers (allowed: 1, 2, 4, 8)
+        if cls.DOWNLOAD_WORKERS not in (1, 2, 4, 8):
+            cls.DOWNLOAD_WORKERS = 4
+
+        # Validate & normalize download request size (must be multiple of 4096 between 4KB and 512KB)
+        cls.DOWNLOAD_REQUEST_SIZE = (cls.DOWNLOAD_REQUEST_SIZE // 4096) * 4096
+        if cls.DOWNLOAD_REQUEST_SIZE < 4096:
+            cls.DOWNLOAD_REQUEST_SIZE = 4096
+        elif cls.DOWNLOAD_REQUEST_SIZE > 524288:
+            cls.DOWNLOAD_REQUEST_SIZE = 524288
+
+        if cls.MAX_DOWNLOAD_RETRIES < 1:
+            cls.MAX_DOWNLOAD_RETRIES = 5
+
+        if cls.DOWNLOAD_PROGRESS_INTERVAL < 1:
+            cls.DOWNLOAD_PROGRESS_INTERVAL = 3
 
 
 settings = Settings()

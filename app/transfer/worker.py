@@ -278,12 +278,15 @@ class TransferWorker:
 
                 # 5. Perform Transfer / Local Download with Retry and FloodWait
                 cur_msg = msg
+                dl_cb = tracker.update_download_progress if tracker else None
                 if is_local_download:
                     async def do_copy(m=cur_msg):
                         res = await message_copier.download_to_local(
                             client=client,
                             message=m,
                             download_dir=local_dest_dir,
+                            job_id=job.id,
+                            download_progress_callback=dl_cb,
                         )
                         return m.id if res else 0
                 else:
@@ -295,6 +298,7 @@ class TransferWorker:
                             destination_thread_id=job.destination_thread_id,
                             job_id=job.id,
                             source_entity=source_entity,
+                            download_progress_callback=dl_cb,
                         )
 
                 try:
@@ -303,6 +307,7 @@ class TransferWorker:
                         job_id=job.id,
                         message_id=msg.id,
                     )
+                    tracker.clear_download_progress()
 
                     # Success: record mapping
                     if dest_msg_id:

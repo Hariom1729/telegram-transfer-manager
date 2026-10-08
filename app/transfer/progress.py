@@ -37,7 +37,17 @@ class ProgressTracker:
 
         self.start_time: float = time.time()
         self.last_update_time: float = 0.0
+        self.current_download_info: Optional[Any] = None
         self._lock = asyncio.Lock()
+
+    async def update_download_progress(self, info: Any) -> None:
+        """Receive real-time chunk download throughput updates from FastMediaDownloader."""
+        self.current_download_info = info
+        await self.update(force=False, status_label="DOWNLOADING")
+
+    def clear_download_progress(self) -> None:
+        """Clear download progress state when media finishes or switches to uploading."""
+        self.current_download_info = None
 
     @property
     def speed(self) -> float:
@@ -90,6 +100,38 @@ class ProgressTracker:
             f"❌ Failed: {self.failed_messages:,}\n\n"
             f"Speed: {speed_str}"
         )
+        if self.current_download_info:
+            info = self.current_download_info
+            size_mb = info.file_size / (1024 * 1024)
+            size_gb = info.file_size / (1024 * 1024 * 1024)
+            dl_mb = info.downloaded_bytes / (1024 * 1024)
+            dl_gb = info.downloaded_bytes / (1024 * 1024 * 1024)
+
+            if info.file_size >= 1024 * 1024 * 1024:
+                size_str = f"{size_gb:.2f} GB"
+                dl_str = f"{dl_gb:.2f} GB"
+            else:
+                size_str = f"{size_mb:.1f} MB"
+                dl_str = f"{dl_mb:.1f} MB"
+
+            cur_spd = info.current_speed / (1024 * 1024)
+            avg_spd = info.average_speed / (1024 * 1024)
+            eta_str = f"{int(info.eta_seconds)}s" if info.eta_seconds > 0 else "--"
+
+            pct = min(100.0, max(0.0, info.percent))
+            filled = int(pct / 10)
+            bar = "█" * filled + "░" * (10 - filled)
+
+            text += (
+                f"\n\n📥 *Downloading*\n"
+                f"File: `{info.file_name}`\n"
+                f"Size: {size_str}\n"
+                f"Downloaded: {dl_str} / {size_str}\n"
+                f"Progress: {pct:.1f}% [{bar}]\n"
+                f"Speed: {cur_spd:.1f} MB/s (Avg: {avg_spd:.1f} MB/s)\n"
+                f"ETA: {eta_str}"
+            )
+
         if self.error_detail:
             text += f"\n\n⚠️ *Reason:* _{self.error_detail}_"
         return text

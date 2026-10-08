@@ -23,6 +23,7 @@ from telethon.tl.types import (
     MessageService,
 )
 
+from app.transfer.downloader import fast_media_downloader
 from app.transfer.retry import NonRetryableTransferError
 from app.utils.paths import (
     get_temp_download_directory,
@@ -223,6 +224,7 @@ class MessageCopier:
         job_id: Optional[int] = None,
         source_entity: Optional[Any] = None,
         on_diagnostics: Optional[Callable[[TransferDiagnostics], None]] = None,
+        download_progress_callback: Optional[Callable[[Any], Coroutine]] = None,
     ) -> int:
         """Copy a message to destination entity using capability-based routing.
 
@@ -354,10 +356,16 @@ class MessageCopier:
         try:
             t_dl_start = time.perf_counter()
             try:
-                downloaded_path = await client.download_media(
-                    message, file=str(temp_path)
+                downloaded_path = await fast_media_downloader.download_media(
+                    client=client,
+                    message=message,
+                    target_path=temp_path,
+                    progress_callback=download_progress_callback,
+                    job_id=job_id,
                 )
             except (TimedOutError, ServerError, ConnectionError):
+                raise
+            except NonRetryableTransferError:
                 raise
             except Exception as dl_err:
                 logger.error(
@@ -423,16 +431,17 @@ class MessageCopier:
             return sent.id
 
         finally:
-            if os.path.exists(temp_path):
-                try:
-                    os.remove(temp_path)
-                except Exception:
-                    pass
-            if downloaded_path and os.path.exists(downloaded_path):
-                try:
-                    os.remove(downloaded_path)
-                except Exception:
-                    pass
+            for p in (
+                temp_path,
+                temp_path.with_name(f"{temp_path.name}.part"),
+                temp_path.with_name(f"{temp_path.name}.part.json"),
+                Path(downloaded_path) if downloaded_path else None,
+            ):
+                if p and p.exists():
+                    try:
+                        p.unlink()
+                    except Exception:
+                        pass
 
     @classmethod
     def get_suggested_filename(cls, message: Message) -> str:
@@ -472,6 +481,8 @@ class MessageCopier:
         client: TelegramClient,
         message: Message,
         download_dir: Path,
+        job_id: Optional[int] = None,
+        download_progress_callback: Optional[Callable[[Any], Coroutine]] = None,
     ) -> Optional[str]:
         """Download message media or text directly to a local directory.
 
@@ -486,10 +497,16 @@ class MessageCopier:
             target_file = get_unique_filepath(download_dir, candidate_name)
             t_start = time.perf_counter()
             try:
-                downloaded_path = await client.download_media(
-                    message, file=str(target_file)
+                downloaded_path = await fast_media_downloader.download_media(
+                    client=client,
+                    message=message,
+                    target_path=target_file,
+                    progress_callback=download_progress_callback,
+                    job_id=job_id,
                 )
             except (TimedOutError, ServerError, ConnectionError):
+                raise
+            except NonRetryableTransferError:
                 raise
             except Exception as e:
                 logger.error(

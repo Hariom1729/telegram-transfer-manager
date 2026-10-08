@@ -605,10 +605,68 @@ async def handle_direct_topic_callback(
         await query.edit_message_text(f"❌ Failed to send to topic: {e}")
 
 
+@check_authorized
+async def download_benchmark_command(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+) -> None:
+    """Handle /download_benchmark command to run internal performance benchmark."""
+    user_id = update.effective_user.id
+    if not settings.is_admin(user_id):
+        await update.effective_message.reply_text("⛔ Admin access required for benchmarking.")
+        return
+
+    from app.transfer.downloader import fast_media_downloader
+
+    args = context.args or []
+    if len(args) < 2:
+        help_text = (
+            "📊 *Download Benchmark Tool*\n\n"
+            "Evaluates throughput across 1, 2, 4, and 8 parallel workers.\n\n"
+            "*Usage:*\n"
+            "`/download_benchmark <chat_id> <message_id>`\n\n"
+            "Example:\n"
+            "`/download_benchmark -1001234567890 42`"
+        )
+        await update.effective_message.reply_text(help_text, parse_mode="Markdown")
+        return
+
+    try:
+        chat_id = int(args[0])
+        msg_id = int(args[1])
+    except ValueError:
+        await update.effective_message.reply_text("❌ Invalid format. Please provide integer chat_id and message_id.")
+        return
+
+    accounts = await user_client_manager.list_user_accounts(user_id)
+    if not accounts:
+        await update.effective_message.reply_text("❌ No connected Telethon account found.")
+        return
+
+    client = await user_client_manager.get_active_client(accounts[0].id)
+    if not client or not client.is_connected():
+        await update.effective_message.reply_text("❌ Connected Telethon account is inactive or disconnected.")
+        return
+
+    status_msg = await update.effective_message.reply_text("⏳ Fetching message and preparing benchmark...")
+    try:
+        msg = await client.get_messages(chat_id, ids=msg_id)
+        if not msg or not msg.media:
+            await status_msg.edit_text("❌ Specified message does not contain media.")
+            return
+
+        await status_msg.edit_text("🚀 Benchmarking download across 1, 2, 4, and 8 workers. Please wait...")
+        result = await fast_media_downloader.benchmark_download(client, msg)
+        await status_msg.edit_text(result.format_report())
+    except Exception as ex:
+        logger.error("Download benchmark failed: %s", ex, exc_info=True)
+        await status_msg.edit_text(f"❌ Benchmark failed: {ex}")
+
+
 def register_handlers(app: Application) -> None:
     """Register all bot command, callback, and message handlers with python-telegram-bot."""
     app.add_handler(CommandHandler("start", start_command))
     app.add_handler(CommandHandler("cancel", cancel_command))
+    app.add_handler(CommandHandler("download_benchmark", download_benchmark_command))
     app.add_handler(
         CallbackQueryHandler(handle_direct_send_callback, pattern=r"^direct_send:")
     )
