@@ -50,7 +50,17 @@ def check_authorized(func: Callable[[Update, ContextTypes.DEFAULT_TYPE], Corouti
                 existing.username = user.username
                 existing.first_name = user.first_name
 
-        return await func(update, context, *args, **kwargs)
+        try:
+            return await func(update, context, *args, **kwargs)
+        except Exception as e:
+            if "not modified" in str(e).lower():
+                if update.callback_query:
+                    try:
+                        await update.callback_query.answer()
+                    except Exception:
+                        pass
+                return
+            raise
 
     return wrapper
 

@@ -49,6 +49,15 @@ async def main() -> None:
     # Register all handlers
     register_handlers(application)
 
+    # Register global error handler
+    async def global_error_handler(update: object, context) -> None:
+        err = context.error
+        if err and "not modified" in str(err).lower():
+            return
+        logger.error("Unhandled exception processing update %s: %s", update, err, exc_info=err)
+
+    application.add_error_handler(global_error_handler)
+
     # 6. Lifecycle management
     stop_event = asyncio.Event()
 
