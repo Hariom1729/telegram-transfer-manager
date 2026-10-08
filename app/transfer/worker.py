@@ -293,6 +293,8 @@ class TransferWorker:
                             destination_entity=dest_entity,
                             message=m,
                             destination_thread_id=job.destination_thread_id,
+                            job_id=job.id,
+                            source_entity=source_entity,
                         )
 
                 try:

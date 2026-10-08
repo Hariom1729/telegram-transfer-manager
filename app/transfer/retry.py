@@ -137,6 +137,15 @@ class RetryExecutor:
                 )
                 await asyncio.sleep(delay)
 
+            except NonRetryableTransferError as e:
+                logger.warning(
+                    "Non-retryable transfer error job=%s message=%s: %s",
+                    job_id,
+                    message_id,
+                    e,
+                )
+                raise
+
             except Exception as e:
                 logger.error(
                     "Unexpected error job=%s message=%s error=%s",
