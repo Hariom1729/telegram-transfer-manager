@@ -374,10 +374,13 @@ async def text_message_handler(
             )
         return
 
-    # 7. Custom Range / Quantity Input
-    elif state == BotState.WIZARD_RANGE_INPUT:
+    # 7. Custom Range / Quantity Input (Supports direct entry from Browser as well)
+    elif state in (BotState.WIZARD_RANGE_INPUT, BotState.WIZARD_BROWSE_MESSAGES):
         raw_text = text.strip()
-        lower_text = raw_text.lower()
+        clean_text = raw_text.replace("#", "").strip()
+        if " to " in clean_text.lower():
+            clean_text = re.sub(r"(?i)\s+to\s+", "-", clean_text)
+        lower_text = clean_text.lower()
         udata = session_store.get_data(user_id)
 
         # 1. Check for "first N" (e.g. "first 5", "first 10")
@@ -444,8 +447,8 @@ async def text_message_handler(
                     )
                 return
 
-        # 3. Check for specific ID range (e.g. "1240-1250" or "1240 1250")
-        range_parts = [p for p in re.split(r"[\s\-]+", raw_text) if p]
+        # 3. Check for specific ID range (e.g. "1240-1250", "1240 1250", "#1240-#1250")
+        range_parts = [p for p in re.split(r"[\s\-]+", clean_text) if p]
         if len(range_parts) == 2 and range_parts[0].isdigit() and range_parts[1].isdigit():
             start_id, end_id = int(range_parts[0]), int(range_parts[1])
             is_valid, err = validate_message_range(start_id, end_id)
@@ -480,9 +483,9 @@ async def text_message_handler(
                 )
             return
 
-        # 4. Check for single message ID (e.g. "1245")
-        if raw_text.isdigit() and int(raw_text) > 0:
-            single_id = int(raw_text)
+        # 4. Check for single message ID (e.g. "1245", "#1245")
+        if clean_text.isdigit() and int(clean_text) > 0:
+            single_id = int(clean_text)
             is_valid, err = validate_message_range(single_id, single_id)
             if not is_valid:
                 await message.reply_text(f"❌ {err}\nPlease try again:")
@@ -513,6 +516,17 @@ async def text_message_handler(
                     reply_markup=build_duplicate_mode_keyboard("skip"),
                     parse_mode="Markdown",
                 )
+            return
+
+        if state == BotState.WIZARD_BROWSE_MESSAGES:
+            await message.reply_text(
+                "💡 *Range Selection*\n\n"
+                "To choose messages from the browser, send:\n"
+                "• **Range:** `10-25` or `10 25`\n"
+                "• **Single message:** `15`\n"
+                "• **Or tap [🎯 Select Range]** below the browser.",
+                parse_mode="Markdown",
+            )
             return
 
         await message.reply_text(

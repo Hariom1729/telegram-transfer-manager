@@ -272,6 +272,9 @@ class MessageBrowser:
 
                 lines.append(f"🆔 *#{m.id}* • *{icon_type}*{name_disp}{date_str}{caption_line}")
 
+            lines.append("")
+            lines.append("💡 _Send range in chat (e.g. `10-25`) or tap *🎯 Select Range* below._")
+
         text_content = "\n".join(lines)
         if len(text_content) > 4000:
             text_content = (
@@ -291,7 +294,15 @@ class MessageBrowser:
             nav_row.append(InlineKeyboardButton("Next ▶️", callback_data="browse:next"))
         buttons.append(nav_row)
 
-        # Row 2: Video Filter & Sort Order Toggle
+        # Row 2: Select Range & Jump to ID (Prominently placed right under pagination!)
+        buttons.append(
+            [
+                InlineKeyboardButton("🎯 Select Range", callback_data="browse:select_range"),
+                InlineKeyboardButton("🔢 Jump to ID", callback_data="browse:jump"),
+            ]
+        )
+
+        # Row 3: Video Filter & Sort Order Toggle
         vid_label = "🎬 Video: ON" if video_only else "🎬 Video: OFF"
         order_label = "⬆️ Oldest First" if order == "asc" else "⬇️ Newest First"
         buttons.append(
@@ -301,25 +312,17 @@ class MessageBrowser:
             ]
         )
 
-        # Row 3: Filters & Jump
+        # Row 4: Search & Destination/Continue
         search_btn = (
             InlineKeyboardButton("❌ Clear Search", callback_data="browse:clear_search")
             if search
             else InlineKeyboardButton("🔍 Search", callback_data="browse:search")
         )
-        buttons.append(
-            [
-                search_btn,
-                InlineKeyboardButton("🔢 Jump to ID", callback_data="browse:jump"),
-            ]
-        )
-
-        # Row 4: Range & Destination/Continue
         dest_id = udata.get("destination_chat_id")
         cont_label = "➡️ Continue to Transfer" if dest_id is not None else "➡️ Select Destination"
         buttons.append(
             [
-                InlineKeyboardButton("🎯 Select Range", callback_data="browse:select_range"),
+                search_btn,
                 InlineKeyboardButton(cont_label, callback_data="browse:to_dest"),
             ]
         )

@@ -904,3 +904,42 @@ async def test_inaccessible_messages_reported_as_failed():
         assert errors[0].error_type == "NonRetryableTransferError"
         assert error_reason in errors[0].error_message
 
+
+@pytest.mark.asyncio
+async def test_browse_state_direct_range_input():
+    """Verify user can type range directly while in WIZARD_BROWSE_MESSAGES state."""
+    user_id = 999
+    session_store.set_state(user_id, BotState.WIZARD_BROWSE_MESSAGES)
+    session_store.update_data(
+        user_id,
+        account_id=1,
+        source_chat_id=-100111,
+        destination_chat_id=-100222,
+    )
+
+    message = MagicMock()
+    message.reply_text = AsyncMock()
+    message.from_user.id = user_id
+    message.chat.id = user_id
+    message.text = "#10-#25"
+
+    context = MagicMock()
+
+    update = MagicMock()
+    update.effective_user.id = user_id
+    update.effective_user.username = "testuser"
+    update.effective_user.first_name = "Test"
+    update.effective_user.is_bot = False
+    update.effective_chat.id = user_id
+    update.message = message
+    update.effective_message = message
+
+    await text_message_handler(update, context)
+
+    udata = session_store.get_data(user_id)
+    assert udata["start_message_id"] == 10
+    assert udata["end_message_id"] == 25
+    assert udata["range_type"] == "custom"
+    message.reply_text.assert_called_once()
+    assert "Messages 10 → 25" in message.reply_text.call_args[0][0]
+
