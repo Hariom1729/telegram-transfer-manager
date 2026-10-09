@@ -943,3 +943,56 @@ async def test_browse_state_direct_range_input():
     message.reply_text.assert_called_once()
     assert "Messages 10 → 25" in message.reply_text.call_args[0][0]
 
+
+@pytest.mark.asyncio
+async def test_content_done_skips_range_when_range_already_set():
+    """Verify that when a range is already specified, content:done moves directly to duplicate handling."""
+    from app.bot.callbacks import _handle_content_action
+    user_id = 999
+    session_store.update_data(
+        user_id,
+        account_id=1,
+        source_chat_id=-100111,
+        destination_chat_id=-100222,
+        start_message_id=1,
+        end_message_id=6,
+        range_type="custom",
+    )
+
+    query = MagicMock()
+    query.edit_message_text = AsyncMock()
+
+    await _handle_content_action(query, user_id, "content:done")
+
+    # Must NOT show range selection! Must show duplicate handling!
+    query.edit_message_text.assert_called_once()
+    call_kwargs = query.edit_message_text.call_args[1]
+    assert "Duplicate Handling" in call_kwargs["text"]
+    assert "Message Range" not in call_kwargs["text"]
+
+    # Session data must NOT wipe out the range!
+    udata = session_store.get_data(user_id)
+    assert udata["start_message_id"] == 1
+    assert udata["end_message_id"] == 6
+
+
+def test_build_range_keyboard_clean():
+    """Verify build_range_keyboard does not contain unwanted 'First 5', 'Last 50' clutter."""
+    from app.bot.keyboards import build_range_keyboard
+    kb = build_range_keyboard()
+    button_texts = [btn.text for row in kb.inline_keyboard for btn in row]
+
+    # Clean options
+    assert "📂 Browse Messages" in button_texts
+    assert "🔢 Enter Message ID/Range" in button_texts
+    assert "➡️ All Messages" in button_texts
+
+    # Must NOT have clutter buttons
+    for text in button_texts:
+        assert "First 5" not in text
+        assert "First 10" not in text
+        assert "Last 50" not in text
+        assert "Last 100" not in text
+        assert "Last 500" not in text
+        assert "Last 1000" not in text
+

@@ -212,25 +212,30 @@ class TransferWorker:
 
         # Query total message count if not set and not specific IDs
         if (not job.total_messages or job.total_messages == 0) and not job.specific_message_ids:
-            try:
-                count_res = await client.get_messages(
-                    source_entity,
-                    limit=0,
-                    reply_to=job.source_thread_id if job.source_thread_id else None,
-                )
-                if hasattr(count_res, "total") and count_res.total and count_res.total > 0:
-                    tracker.total_messages = count_res.total
-                    job.total_messages = count_res.total
-                    async with get_session() as session:
-                        res = await session.execute(
-                            select(TransferJob).where(TransferJob.id == job_id)
-                        )
-                        db_j = res.scalar_one_or_none()
-                        if db_j:
-                            db_j.total_messages = count_res.total
-                            await session.commit()
-            except Exception as e:
-                logger.debug("Could not query total messages via get_messages(limit=0): %s", e)
+            if job.start_message_id and job.end_message_id:
+                range_cnt = max(0, job.end_message_id - job.start_message_id + 1)
+                tracker.total_messages = range_cnt
+                job.total_messages = range_cnt
+            else:
+                try:
+                    count_res = await client.get_messages(
+                        source_entity,
+                        limit=0,
+                        reply_to=job.source_thread_id if job.source_thread_id else None,
+                    )
+                    if hasattr(count_res, "total") and count_res.total and count_res.total > 0:
+                        tracker.total_messages = count_res.total
+                        job.total_messages = count_res.total
+                        async with get_session() as session:
+                            res = await session.execute(
+                                select(TransferJob).where(TransferJob.id == job_id)
+                            )
+                            db_j = res.scalar_one_or_none()
+                            if db_j:
+                                db_j.total_messages = count_res.total
+                                await session.commit()
+                except Exception as e:
+                    logger.debug("Could not query total messages via get_messages(limit=0): %s", e)
 
         # Parse allowed content types
         raw_types = (job.content_types or "all").lower().split(",")

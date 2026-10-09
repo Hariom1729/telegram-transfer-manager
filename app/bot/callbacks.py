@@ -759,17 +759,49 @@ async def _handle_content_action(query, user_id: int, data: str) -> None:
         return
 
     if data == "content:done":
-        # Show range selection
         is_local = (user_data.get("destination_chat_id", 0) == 0) or bool(user_data.get("is_local_download"))
+
+        # If user ALREADY entered a range (via Browse or Enter Range), DO NOT prompt again!
+        has_specific_range = (
+            (user_data.get("start_message_id") is not None and user_data.get("end_message_id") is not None)
+            or user_data.get("range_type") in ("custom", "single")
+        )
+
+        if has_specific_range:
+            # Move straight to duplicate handling — preserving the user's selected range!
+            if is_local:
+                text = (
+                    "💾 *Local Download — Duplicate Handling*\n\n"
+                    "Choose how to handle files that already exist on disk:"
+                )
+            else:
+                text = (
+                    "🔁 *Transfer Settings — Duplicate Handling*\n\n"
+                    "Choose how to handle messages that were already transferred:"
+                )
+            await query.edit_message_text(
+                text=text,
+                reply_markup=build_duplicate_mode_keyboard("skip"),
+                parse_mode="Markdown",
+            )
+            return
+
+        # Otherwise, show clean range selection
         if is_local:
             text = (
-                "💾 *Local Download — Quantity & Range*\n\n"
-                "Choose how many files/messages to download to local disk:"
+                "💾 *Local Download — Message Range*\n\n"
+                "Choose which messages to transfer:\n"
+                "• **Browse Messages:** View history & pick videos\n"
+                "• **Enter Message ID/Range:** Specify message IDs (e.g. `1-6` or `1 6`)\n"
+                "• **All Messages:** Transfer entire chat history"
             )
         else:
             text = (
                 "📅 *Transfer Settings — Message Range*\n\n"
-                "Choose which messages to transfer:"
+                "Choose which messages to transfer:\n"
+                "• **Browse Messages:** View history & pick videos\n"
+                "• **Enter Message ID/Range:** Specify message IDs (e.g. `1-6` or `1 6`)\n"
+                "• **All Messages:** Transfer entire chat history"
             )
         await query.edit_message_text(
             text=text,
@@ -895,11 +927,10 @@ async def _handle_range_action(query, user_id: int, data: str) -> None:
         if r_type == "custom":
             session_store.set_state(user_id, BotState.WIZARD_RANGE_INPUT)
             text = (
-                "🔢 *Enter Message Range or Quantity*\n\n"
-                "Send any of the following formats:\n"
-                "• **Single message:** `1245`\n"
-                "• **Specific ID range:** `1240-1250` or `1240 1250`\n"
-                "• **Recent messages:** `first 10` or `last 20`"
+                "🔢 *Enter Message ID or Range*\n\n"
+                "Send any of the following formats in chat:\n"
+                "• **Message range:** `1-6` or `1 6`\n"
+                "• **Single message:** `1245`"
             )
             kb = InlineKeyboardMarkup(
                 [[InlineKeyboardButton("⬅️ Back", callback_data="content:done")]]
