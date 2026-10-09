@@ -66,7 +66,7 @@ async def _handle_http_request(
             body = json.dumps(payload, indent=2) + "\n"
 
         # 2. Modern Web Dashboard / Telegram Mini App UI
-        elif clean_path in ("/", "/app", "/index.html"):
+        elif clean_path in ("/", "/app", "/index.html", "/dashboard", "/ui"):
             if HTML_FILE.exists():
                 body = HTML_FILE.read_text(encoding="utf-8")
             else:

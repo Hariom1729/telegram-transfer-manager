@@ -7,6 +7,9 @@ services:
     restart: unless-stopped
     env_file:
       - .env
+    ports:
+      - "80:10000"
+      - "10000:10000"
     volumes:
       - ./data:/app/data
       - ./logs:/app/logs
@@ -15,4 +18,5 @@ services:
       - DATABASE_URL=sqlite+aiosqlite:////app/data/telegram.db
       - SESSION_DIRECTORY=/app/data/sessions
       - DOWNLOAD_DIRECTORY=/app/downloads
+      - PORT=10000
 
