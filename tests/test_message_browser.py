@@ -1070,3 +1070,42 @@ def test_get_download_directory_env_override(tmp_path, monkeypatch):
     assert resolved.exists()
 
 
+@pytest.mark.asyncio
+async def test_preview_start_local_download_creates_job():
+    """Verify preview:start creates job without NameError (topic_name, etc.)."""
+    from app.bot.callbacks import _handle_preview_action
+    from unittest.mock import AsyncMock, patch
+
+    user_id = 9912
+    session_store.clear(user_id)
+    session_store.update_data(
+        user_id,
+        account_id=1,
+        source_chat_id=-100111,
+        source_chat_title="Source",
+        destination_chat_id=0,
+        destination_chat_title="💾 Downloads Folder",
+        start_message_id=1,
+        end_message_id=5,
+        content_types=["all"],
+        duplicate_mode="skip",
+    )
+
+    query = MagicMock()
+    query.message.chat_id = 1234
+    query.message.message_id = 5678
+    query.edit_message_text = AsyncMock()
+
+    with patch("app.transfer.manager.transfer_manager.create_job", new_callable=AsyncMock) as mock_create, \
+         patch("app.transfer.manager.transfer_manager.start_job", new_callable=AsyncMock) as mock_start:
+        fake_job = MagicMock()
+        fake_job.id = 777
+        mock_create.return_value = fake_job
+
+        await _handle_preview_action(query, user_id, "preview:start")
+
+        mock_create.assert_called_once()
+        mock_start.assert_called_once_with(777)
+
+
+

@@ -1161,6 +1161,7 @@ async def _handle_preview_action(query, user_id: int, data: str) -> None:
         dest_id = udata.get("destination_chat_id", 0)
         dest_title = udata.get("destination_chat_title")
         dest_thread_id = udata.get("destination_thread_id")
+        topic_name = udata.get("topic_name")
         raw_c_types = udata.get("content_types", ["all"])
         if bool(udata.get("browse_video_only")) and "all" in raw_c_types:
             c_types = "video"
