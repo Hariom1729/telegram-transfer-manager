@@ -803,6 +803,10 @@ async def _handle_browse_action(query, user_id: int, data: str) -> None:
         await MessageBrowser.toggle_video(query, user_id)
         return
 
+    if data == "browse:toggle_order":
+        await MessageBrowser.toggle_order(query, user_id)
+        return
+
     if data == "browse:search":
         session_store.set_state(user_id, BotState.WIZARD_BROWSE_SEARCH)
         text = (

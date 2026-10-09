@@ -27,7 +27,7 @@ def _escape_md(text: str) -> str:
 class MessageBrowser:
     """Handles paginated message browsing, video filtering, search, and jump."""
 
-    PAGE_SIZE = 15
+    PAGE_SIZE = 25
 
     @classmethod
     async def show_browser(
@@ -38,7 +38,7 @@ class MessageBrowser:
         jump_id: Optional[int] = None,
         search_query: Optional[str] = None,
     ) -> None:
-        """Display 15 messages per page with navigation and filter controls."""
+        """Display messages per page (25 items) with navigation, filters, and sort order."""
         udata = session_store.get_data(user_id)
         source_id = udata.get("source_chat_id")
         source_title = udata.get("source_chat_title", "Source Chat")
@@ -63,7 +63,8 @@ class MessageBrowser:
             await cls._render(update_or_query, text, kb)
             return
 
-        # Pagination & Filter state initialization
+        # Pagination, Filter & Sort Order state initialization (Default: "asc" = increasing / oldest first)
+        order = str(udata.get("browse_order", "asc"))
         if reset or "browse_offset_stack" not in udata:
             offset_stack: List[int] = [0]
             offset_id = 0
@@ -79,8 +80,13 @@ class MessageBrowser:
 
         if jump_id is not None:
             # Jumping to an ID:
-            # Telethon get_messages(offset_id=jump_id + 1) returns messages with ID <= jump_id
-            offset_id = max(1, jump_id + 1)
+            # In asc order: offset_id = max(0, jump_id - 1) causes Telethon (with reverse=True)
+            # to start right at jump_id onwards in increasing order.
+            # In desc order: offset_id = jump_id + 1 fetches messages <= jump_id downwards.
+            if order == "asc":
+                offset_id = max(0, jump_id - 1)
+            else:
+                offset_id = max(1, jump_id + 1)
             offset_stack = [offset_id]
             page = 0
             search = None
@@ -95,12 +101,14 @@ class MessageBrowser:
         # Fetch messages via Telethon MTProto APIs (metadata only, no media downloaded)
         filter_obj = InputMessagesFilterVideo() if video_only else None
         messages: List[Any] = []
+        is_reverse = (order == "asc")
 
         try:
             source_entity = await client.get_entity(source_id)
             get_kwargs: dict[str, Any] = {
                 "limit": cls.PAGE_SIZE,
                 "offset_id": offset_id,
+                "reverse": is_reverse,
             }
             if filter_obj is not None:
                 get_kwargs["filter"] = filter_obj
@@ -118,8 +126,9 @@ class MessageBrowser:
             try:
                 source_entity = await client.get_entity(source_id)
                 fallback_kwargs: dict[str, Any] = {
-                    "limit": cls.PAGE_SIZE if not video_only else 50,
+                    "limit": cls.PAGE_SIZE if not video_only else (cls.PAGE_SIZE * 3),
                     "offset_id": offset_id,
+                    "reverse": is_reverse,
                 }
                 if search:
                     fallback_kwargs["search"] = search
@@ -153,7 +162,13 @@ class MessageBrowser:
             m for m in messages if m and getattr(m, "id", None) and not getattr(m, "empty", False)
         ]
 
-        oldest_id = min(m.id for m in valid_messages) if valid_messages else offset_id
+        # Ensure correct ordering on screen
+        if order == "asc":
+            valid_messages.sort(key=lambda m: m.id)
+            advance_id = max(m.id for m in valid_messages) if valid_messages else offset_id
+        else:
+            valid_messages.sort(key=lambda m: m.id, reverse=True)
+            advance_id = min(m.id for m in valid_messages) if valid_messages else offset_id
 
         # Update session store
         session_store.update_data(
@@ -163,8 +178,10 @@ class MessageBrowser:
             browse_offset_stack=offset_stack,
             browse_video_only=video_only,
             browse_search_query=search,
+            browse_order=order,
             browse_last_count=len(valid_messages),
-            browse_last_oldest_id=oldest_id,
+            browse_last_advance_id=advance_id,
+            browse_last_oldest_id=advance_id,
         )
         session_store.set_state(user_id, BotState.WIZARD_BROWSE_MESSAGES)
 
@@ -173,16 +190,17 @@ class MessageBrowser:
         topic_disp = (
             f" • 🧵 `{_escape_md(source_topic_name)}`" if source_topic_name else ""
         )
-        lines.append(f"📂 *Browse Messages — Page {page + 1}*")
+        order_badge = "⬆️ Oldest First" if order == "asc" else "⬇️ Newest First"
+        lines.append(f"📂 *Browse Messages — Page {page + 1}* ({order_badge})")
         lines.append(f"📢 *{_escape_md(source_title)}*{topic_disp}")
 
         status_chips: List[str] = []
         if video_only:
             status_chips.append("📹 Video Only: ON")
         if search:
-            status_chips.append(f"🔍 Search: '{_escape_md(search)}'")
-        if status_chips:
-            lines.append("⚙️ _" + " | ".join(status_chips) + "_")
+            status_chips.append(f"🔍 '{_escape_md(search)}'")
+        status_chips.append(f"{len(valid_messages)} items")
+        lines.append("⚙️ _" + " | ".join(status_chips) + "_")
         lines.append("")
 
         if not valid_messages:
@@ -193,13 +211,13 @@ class MessageBrowser:
             for m in valid_messages:
                 m_type = MessageCopier.classify_message_content(m)
 
-                # Clearly identify video with a video icon
+                # Media type icon
                 if m_type == "video":
                     icon_type = "📹 [VIDEO]"
                 elif m_type == "photo":
                     icon_type = "🖼 Photo"
                 elif m_type == "document":
-                    icon_type = "📄 Document"
+                    icon_type = "📄 Doc"
                 elif m_type == "audio":
                     icon_type = "🎵 Audio"
                 elif m_type == "animation":
@@ -211,12 +229,6 @@ class MessageBrowser:
                 else:
                     icon_type = "📁 Media"
 
-                date_str = (
-                    m.date.strftime("%Y-%m-%d %H:%M")
-                    if getattr(m, "date", None)
-                    else "Unknown"
-                )
-
                 # Check filename when available
                 filename: Optional[str] = None
                 if getattr(m, "file", None) and getattr(m.file, "name", None):
@@ -227,27 +239,45 @@ class MessageBrowser:
                             filename = attr.file_name
                             break
 
-                # Caption / text preview
-                text_preview = ""
+                # Compact filename display
+                name_disp = ""
+                if filename:
+                    clean_fn = filename.replace("`", "")
+                    if len(clean_fn) > 34:
+                        clean_fn = clean_fn[:31] + "..."
+                    name_disp = f" `{clean_fn}`"
+
+                # Date
+                date_str = (
+                    f" | 📅 `{m.date.strftime('%m-%d %H:%M')}`"
+                    if getattr(m, "date", None)
+                    else ""
+                )
+
+                # Caption preview (omit if duplicates filename or empty)
+                caption_line = ""
                 raw_text = (m.message or "").strip()
                 if raw_text:
                     clean_text = " ".join(raw_text.split())
-                    if len(clean_text) > 42:
-                        clean_text = clean_text[:39] + "..."
-                    text_preview = f"💬 _{_escape_md(clean_text)}_\n"
+                    is_dup = False
+                    if filename:
+                        fn_clean = filename.lower().replace("_", " ").replace("-", " ")
+                        ct_clean = clean_text.lower().replace("_", " ").replace("-", " ")
+                        if fn_clean in ct_clean or ct_clean in fn_clean:
+                            is_dup = True
+                    if not is_dup:
+                        if len(clean_text) > 40:
+                            clean_text = clean_text[:37] + "..."
+                        caption_line = f"\n   💬 _{_escape_md(clean_text)}_"
 
-                file_line = (
-                    f"📎 `{filename.replace('`', '')}`\n" if filename else ""
-                )
-
-                lines.append(
-                    f"🆔 *#{m.id}* • *{icon_type}* | 📅 `{date_str}`\n"
-                    f"{file_line}"
-                    f"{text_preview}"
-                    f"┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈"
-                )
+                lines.append(f"🆔 *#{m.id}* • *{icon_type}*{name_disp}{date_str}{caption_line}")
 
         text_content = "\n".join(lines)
+        if len(text_content) > 4000:
+            text_content = (
+                text_content[:3950].rsplit("\n", 1)[0]
+                + "\n\n⚠️ _(Page truncated to fit Telegram message limit)_"
+            )
 
         # Build Navigation Keyboard
         buttons: List[List[InlineKeyboardButton]] = []
@@ -261,49 +291,40 @@ class MessageBrowser:
             nav_row.append(InlineKeyboardButton("Next ▶️", callback_data="browse:next"))
         buttons.append(nav_row)
 
-        # Row 2: Filters & Search
-        vid_label = "🎬 Video Only: ON" if video_only else "🎬 Video Only: OFF"
-        filter_row = [
-            InlineKeyboardButton(vid_label, callback_data="browse:toggle_video")
-        ]
-        if search:
-            filter_row.append(
-                InlineKeyboardButton("❌ Clear Search", callback_data="browse:clear_search")
-            )
-        else:
-            filter_row.append(
-                InlineKeyboardButton("🔍 Search", callback_data="browse:search")
-            )
-        buttons.append(filter_row)
-
-        # Row 3: Jump & Range
+        # Row 2: Video Filter & Sort Order Toggle
+        vid_label = "🎬 Video: ON" if video_only else "🎬 Video: OFF"
+        order_label = "⬆️ Oldest First" if order == "asc" else "⬇️ Newest First"
         buttons.append(
             [
-                InlineKeyboardButton("🔢 Jump to ID", callback_data="browse:jump"),
-                InlineKeyboardButton("🎯 Select Range", callback_data="browse:select_range"),
+                InlineKeyboardButton(vid_label, callback_data="browse:toggle_video"),
+                InlineKeyboardButton(order_label, callback_data="browse:toggle_order"),
             ]
         )
 
-        # Row 4: Continue or Destination
-        dest_id = udata.get("destination_chat_id")
-        if dest_id is not None:
-            buttons.append(
-                [
-                    InlineKeyboardButton(
-                        "➡️ Continue to Transfer", callback_data="browse:to_dest"
-                    )
-                ]
-            )
-        else:
-            buttons.append(
-                [
-                    InlineKeyboardButton(
-                        "➡️ Select Destination", callback_data="browse:to_dest"
-                    )
-                ]
-            )
+        # Row 3: Filters & Jump
+        search_btn = (
+            InlineKeyboardButton("❌ Clear Search", callback_data="browse:clear_search")
+            if search
+            else InlineKeyboardButton("🔍 Search", callback_data="browse:search")
+        )
+        buttons.append(
+            [
+                search_btn,
+                InlineKeyboardButton("🔢 Jump to ID", callback_data="browse:jump"),
+            ]
+        )
 
-        # Row 5: Back
+        # Row 4: Range & Destination/Continue
+        dest_id = udata.get("destination_chat_id")
+        cont_label = "➡️ Continue to Transfer" if dest_id is not None else "➡️ Select Destination"
+        buttons.append(
+            [
+                InlineKeyboardButton("🎯 Select Range", callback_data="browse:select_range"),
+                InlineKeyboardButton(cont_label, callback_data="browse:to_dest"),
+            ]
+        )
+
+        # Row 5: Back & Home
         buttons.append(
             [
                 InlineKeyboardButton("⬅️ Back to Source Menu", callback_data="browse:back"),
@@ -316,20 +337,22 @@ class MessageBrowser:
 
     @classmethod
     async def handle_next(cls, query: Any, user_id: int) -> None:
-        """Navigate to next page (older messages in Telegram history)."""
+        """Navigate to next page."""
         udata = session_store.get_data(user_id)
-        oldest_id = udata.get("browse_last_oldest_id")
+        advance_id = udata.get("browse_last_advance_id") or udata.get("browse_last_oldest_id")
         offset_stack = list(udata.get("browse_offset_stack", [0]))
         page = int(udata.get("browse_page", 0))
+        order = udata.get("browse_order", "asc")
 
-        if not oldest_id or udata.get("browse_last_count", 0) < cls.PAGE_SIZE:
-            await query.answer("Reached oldest available messages.", show_alert=False)
+        if not advance_id or udata.get("browse_last_count", 0) < cls.PAGE_SIZE:
+            msg = "Reached newest messages." if order == "asc" else "Reached oldest messages."
+            await query.answer(msg, show_alert=False)
             return
 
-        offset_stack.append(oldest_id)
+        offset_stack.append(advance_id)
         session_store.update_data(
             user_id,
-            browse_offset_id=oldest_id,
+            browse_offset_id=advance_id,
             browse_offset_stack=offset_stack,
             browse_page=page + 1,
         )
@@ -338,7 +361,7 @@ class MessageBrowser:
 
     @classmethod
     async def handle_prev(cls, query: Any, user_id: int) -> None:
-        """Navigate to previous page (newer messages)."""
+        """Navigate to previous page."""
         udata = session_store.get_data(user_id)
         offset_stack = list(udata.get("browse_offset_stack", [0]))
         page = int(udata.get("browse_page", 0))
@@ -362,6 +385,23 @@ class MessageBrowser:
         await cls.show_browser(query, user_id, reset=False)
 
     @classmethod
+    async def toggle_order(cls, query: Any, user_id: int) -> None:
+        """Toggle between ascending (oldest first) and descending (newest first)."""
+        udata = session_store.get_data(user_id)
+        current_order = udata.get("browse_order", "asc")
+        new_order = "desc" if current_order == "asc" else "asc"
+        session_store.update_data(
+            user_id,
+            browse_order=new_order,
+            browse_page=0,
+            browse_offset_id=0,
+            browse_offset_stack=[0],
+        )
+        desc = "Oldest First (Ascending ⬆️)" if new_order == "asc" else "Newest First (Descending ⬇️)"
+        await query.answer(f"Order: {desc}")
+        await cls.show_browser(query, user_id, reset=False)
+
+    @classmethod
     async def toggle_video(cls, query: Any, user_id: int) -> None:
         """Toggle video-only filter on/off."""
         udata = session_store.get_data(user_id)
@@ -374,7 +414,7 @@ class MessageBrowser:
             browse_offset_stack=[0],
             content_types=["video"] if new_val else ["all"],
         )
-        status_txt = "🎬 Video Only: ON" if new_val else "📦 Video Only: OFF (All content)"
+        status_txt = "🎬 Video: ON" if new_val else "📦 Video: OFF (All content)"
         await query.answer(status_txt)
         await cls.show_browser(query, user_id, reset=False)
 

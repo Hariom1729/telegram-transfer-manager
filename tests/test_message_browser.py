@@ -123,7 +123,7 @@ def make_mock_message(
 
 @pytest.mark.asyncio
 async def test_message_browser_display_page():
-    """Verify MessageBrowser displays 15 messages with ID, video icon, filename, date, text."""
+    """Verify MessageBrowser displays 25 messages with ID, video icon, filename, date, text in increasing order."""
     user_id = 999
     session_store.update_data(
         user_id,
@@ -135,15 +135,15 @@ async def test_message_browser_display_page():
     mock_client = AsyncMock()
     mock_client.is_connected = MagicMock(return_value=True)
 
-    # Generate 15 sample messages
+    # Generate 25 sample messages
     messages = [
         make_mock_message(
-            1245 - i,
-            text=f"Tutorial #{15 - i} details",
+            1200 + i,
+            text=f"Tutorial #{i + 1} details",
             media_type="video" if i % 2 == 0 else "document",
             filename=f"file_{i}.mp4" if i % 2 == 0 else f"notes_{i}.pdf",
         )
-        for i in range(15)
+        for i in range(25)
     ]
     mock_client.get_messages = AsyncMock(return_value=messages)
     mock_client.get_entity = AsyncMock(return_value=MagicMock())
@@ -160,18 +160,21 @@ async def test_message_browser_display_page():
     reply_markup = call_kwargs["reply_markup"]
 
     # Verify ID, video icon, and filename
-    assert "#1245" in rendered_text
+    assert "#1200" in rendered_text
+    assert "#1224" in rendered_text
     assert "📹 [VIDEO]" in rendered_text
     assert "file_0.mp4" in rendered_text
-    assert "📄 Document" in rendered_text
+    assert "📄 Doc" in rendered_text
     assert "notes_1.pdf" in rendered_text
     assert "Browse Messages — Page 1" in rendered_text
+    assert "Oldest First" in rendered_text
 
     # Verify navigation buttons
     btn_texts = [btn.text for row in reply_markup.inline_keyboard for btn in row]
     assert "🔄 Refresh" in btn_texts
     assert "Next ▶️" in btn_texts
-    assert "🎬 Video Only: OFF" in btn_texts
+    assert "🎬 Video: OFF" in btn_texts
+    assert "⬆️ Oldest First" in btn_texts
     assert "🔍 Search" in btn_texts
     assert "🔢 Jump to ID" in btn_texts
     assert "🎯 Select Range" in btn_texts
@@ -183,7 +186,7 @@ async def test_message_browser_display_page():
 
 @pytest.mark.asyncio
 async def test_message_browser_pagination_next_and_prev():
-    """Verify Next page pushes oldest ID to stack and Prev page pops it."""
+    """Verify Next page advances offset stack and Prev page pops it in increasing order."""
     user_id = 999
     session_store.update_data(
         user_id,
@@ -195,8 +198,9 @@ async def test_message_browser_pagination_next_and_prev():
     mock_client = AsyncMock()
     mock_client.is_connected = MagicMock(return_value=True)
 
-    page_0_messages = [make_mock_message(100 - i) for i in range(15)]
-    page_1_messages = [make_mock_message(85 - i) for i in range(15)]
+    # 25 messages per page in increasing order
+    page_0_messages = [make_mock_message(1 + i) for i in range(25)]
+    page_1_messages = [make_mock_message(26 + i) for i in range(25)]
 
     mock_client.get_messages = AsyncMock(side_effect=[page_0_messages, page_1_messages, page_0_messages])
     mock_client.get_entity = AsyncMock(return_value=MagicMock())
@@ -211,12 +215,12 @@ async def test_message_browser_pagination_next_and_prev():
         assert session_store.get_data(user_id)["browse_page"] == 0
         assert session_store.get_data(user_id)["browse_offset_id"] == 0
 
-        # 2. Next Page
+        # 2. Next Page (advances to messages > max_id of page 0, which is 25)
         await MessageBrowser.handle_next(query, user_id)
         udata = session_store.get_data(user_id)
         assert udata["browse_page"] == 1
-        assert udata["browse_offset_id"] == 86  # min id of page 0 is 86 (100 - 14)
-        assert udata["browse_offset_stack"] == [0, 86]
+        assert udata["browse_offset_id"] == 25
+        assert udata["browse_offset_stack"] == [0, 25]
 
         # 3. Prev Page
         await MessageBrowser.handle_prev(query, user_id)
@@ -247,9 +251,9 @@ async def test_message_browser_video_only_filter():
 
     # 3 video messages with non-sequential IDs
     video_messages = [
-        make_mock_message(1250, "Vid 1", "video", "vid1.mp4"),
+        make_mock_message(1210, "Vid 1", "video", "vid1.mp4"),
         make_mock_message(1230, "Vid 2", "video", "vid2.mp4"),
-        make_mock_message(1210, "Vid 3", "video", "vid3.mp4"),
+        make_mock_message(1250, "Vid 3", "video", "vid3.mp4"),
     ]
     mock_client.get_messages = AsyncMock(return_value=video_messages)
     mock_client.get_entity = AsyncMock(return_value=MagicMock())
@@ -272,9 +276,9 @@ async def test_message_browser_video_only_filter():
 
     # Verify original message IDs preserved without renumbering
     rendered_text = query.edit_message_text.call_args[1]["text"]
-    assert "#1250" in rendered_text
-    assert "#1230" in rendered_text
     assert "#1210" in rendered_text
+    assert "#1230" in rendered_text
+    assert "#1250" in rendered_text
 
 
 # =============================================================================
@@ -283,7 +287,7 @@ async def test_message_browser_video_only_filter():
 
 @pytest.mark.asyncio
 async def test_message_browser_jump_to_id():
-    """Verify jumping to message ID sets offset_id = jump_id + 1."""
+    """Verify jumping to message ID sets offset_id appropriately for asc order."""
     user_id = 999
     session_store.update_data(
         user_id,
@@ -304,9 +308,40 @@ async def test_message_browser_jump_to_id():
         await MessageBrowser.show_browser(query, user_id, jump_id=1245)
 
     called_kwargs = mock_client.get_messages.call_args[1]
-    # Telethon offset_id is jump_id + 1 to fetch messages <= jump_id
-    assert called_kwargs["offset_id"] == 1246
-    assert session_store.get_data(user_id)["browse_offset_id"] == 1246
+    # In asc order, offset_id is jump_id - 1 so Telethon starts right at jump_id
+    assert called_kwargs["offset_id"] == 1244
+    assert session_store.get_data(user_id)["browse_offset_id"] == 1244
+
+
+@pytest.mark.asyncio
+async def test_message_browser_order_toggle():
+    """Verify toggling sort order flips between ascending and descending."""
+    user_id = 999
+    session_store.update_data(
+        user_id,
+        account_id=1,
+        source_chat_id=-100123456789,
+        source_chat_title="Python Tutorials",
+        browse_order="asc",
+    )
+
+    mock_client = AsyncMock()
+    mock_client.is_connected = MagicMock(return_value=True)
+    mock_client.get_messages = AsyncMock(return_value=[make_mock_message(100)])
+    mock_client.get_entity = AsyncMock(return_value=MagicMock())
+
+    query = MagicMock()
+    query.answer = AsyncMock()
+    query.edit_message_text = AsyncMock()
+
+    with patch("app.telegram.user_client.user_client_manager.get_active_client", return_value=mock_client):
+        # Toggle from asc to desc
+        await MessageBrowser.toggle_order(query, user_id)
+        assert session_store.get_data(user_id)["browse_order"] == "desc"
+
+        # Toggle from desc back to asc
+        await MessageBrowser.toggle_order(query, user_id)
+        assert session_store.get_data(user_id)["browse_order"] == "asc"
 
 
 # =============================================================================
