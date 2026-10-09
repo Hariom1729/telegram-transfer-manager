@@ -44,6 +44,8 @@ class DiscoveredChat:
     @property
     def display_icon(self) -> str:
         """Icon representing the entity type."""
+        if self.id == 0:
+            return "💾"
         if self.chat_type == "channel":
             return "📢"
         elif self.chat_type == "supergroup":

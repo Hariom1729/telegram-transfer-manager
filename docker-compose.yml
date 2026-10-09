@@ -10,7 +10,9 @@ services:
     volumes:
       - ./data:/app/data
       - ./logs:/app/logs
+      - ./downloads:/app/downloads
     environment:
       - DATABASE_URL=sqlite+aiosqlite:////app/data/telegram.db
       - SESSION_DIRECTORY=/app/data/sessions
+      - DOWNLOAD_DIRECTORY=/app/downloads
 

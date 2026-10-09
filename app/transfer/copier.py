@@ -370,17 +370,29 @@ class MessageCopier:
                 )
             except (TimedOutError, ServerError, ConnectionError):
                 raise
-            except NonRetryableTransferError:
-                raise
             except Exception as dl_err:
-                logger.error(
-                    "Telegram media retrieval error for message %s: %s",
+                logger.warning(
+                    "Fast media download failed for message %s (%s). Attempting fallback to standard Telethon download_media...",
                     message.id,
                     dl_err,
                 )
-                raise NonRetryableTransferError(
-                    "Telegram did not make the media available to this account."
-                ) from dl_err
+                try:
+                    std_res = await client.download_media(message, file=str(temp_path))
+                    if std_res and os.path.exists(std_res):
+                        downloaded_path = std_res
+                    else:
+                        raise NonRetryableTransferError(
+                            "Telegram did not make the media available to this account."
+                        )
+                except Exception as fe:
+                    logger.error(
+                        "Standard fallback download also failed for message %s: %s",
+                        message.id,
+                        fe,
+                    )
+                    raise NonRetryableTransferError(
+                        "Telegram did not make the media available to this account."
+                    ) from fe
 
             t_dl_end = time.perf_counter()
 
@@ -576,15 +588,29 @@ class MessageCopier:
                 )
             except (TimedOutError, ServerError, ConnectionError):
                 raise
-            except NonRetryableTransferError:
-                raise
             except Exception as e:
-                logger.error(
-                    "Failed to download media for message %s: %s", message.id, e
+                logger.warning(
+                    "Fast media download failed for message %s (%s). Attempting fallback to standard Telethon download_media...",
+                    message.id,
+                    e,
                 )
-                raise NonRetryableTransferError(
-                    "Telegram did not make the media available to this account."
-                ) from e
+                try:
+                    std_res = await client.download_media(message, file=str(target_file))
+                    if std_res and os.path.exists(std_res):
+                        downloaded_path = std_res
+                    else:
+                        raise NonRetryableTransferError(
+                            "Telegram did not make the media available to this account."
+                        )
+                except Exception as fe:
+                    logger.error(
+                        "Standard fallback download also failed for message %s: %s",
+                        message.id,
+                        fe,
+                    )
+                    raise NonRetryableTransferError(
+                        "Telegram did not make the media available to this account."
+                    ) from fe
 
             t_end = time.perf_counter()
             if not downloaded_path or not os.path.exists(downloaded_path):

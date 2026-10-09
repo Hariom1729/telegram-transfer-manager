@@ -996,3 +996,77 @@ def test_build_range_keyboard_clean():
         assert "Last 500" not in text
         assert "Last 1000" not in text
 
+
+@pytest.mark.asyncio
+async def test_pick_downloads_folder_destination():
+    """Verify selecting 'Save to Downloads Folder' (cp:dst:pk:0) does not raise TypeError and correctly sets destination."""
+    from app.bot.chat_picker import ChatPicker
+    from app.telegram.discovery import DiscoveredChat
+
+    # Verify DiscoveredChat for id=0
+    chat_zero = DiscoveredChat(id=0, title="💾 Local Downloads Folder", chat_type="private")
+    assert chat_zero.display_icon == "💾"
+
+    user_id = 8881
+    session_store.clear(user_id)
+    session_store.update_data(user_id, account_id=1, source_chat_id=-100123)
+
+    query = MagicMock()
+    query.edit_message_text = AsyncMock()
+
+    await ChatPicker.handle_pick(query, user_id, "dest", 0)
+
+    udata = session_store.get_data(user_id)
+    assert udata["destination_chat_id"] == 0
+    assert udata["destination_chat_title"] == "💾 Downloads Folder"
+
+
+@pytest.mark.asyncio
+async def test_source_selection_local_download_menu():
+    """Verify picking source chat in local download mode offers browse, enter range, and download to local buttons."""
+    from app.bot.chat_picker import ChatPicker
+    from app.telegram.discovery import DiscoveredChat
+
+    user_id = 8882
+    session_store.clear(user_id)
+    session_store.update_data(
+        user_id,
+        account_id=1,
+        is_local_download=True,
+        destination_chat_id=0,
+        destination_chat_title="💾 Downloads Folder",
+    )
+
+    fake_source = DiscoveredChat(id=-100999, title="Study Channel", chat_type="channel")
+    from app.telegram.discovery import ChatDiscovery
+    ChatDiscovery._dialog_cache[1] = [fake_source]
+
+    query = MagicMock()
+    query.edit_message_text = AsyncMock()
+
+    await ChatPicker.handle_pick(query, user_id, "source", -100999)
+
+    query.edit_message_text.assert_called_once()
+    call_kwargs = query.edit_message_text.call_args[1]
+    text = call_kwargs["text"]
+    kb = call_kwargs["reply_markup"]
+    btn_texts = [b.text for row in kb.inline_keyboard for b in row]
+
+    assert "Choose what to download:" in text
+    assert "📂 Browse Messages" in btn_texts
+    assert "🔢 Enter Message ID/Range" in btn_texts
+    assert "➡️ All Messages (Download to Local)" in btn_texts
+
+
+def test_get_download_directory_env_override(tmp_path, monkeypatch):
+    """Verify DOWNLOAD_DIRECTORY environment variable is respected."""
+    from app.utils.paths import get_download_directory
+
+    custom_dir = tmp_path / "custom_downloads"
+    monkeypatch.setenv("DOWNLOAD_DIRECTORY", str(custom_dir))
+
+    resolved = get_download_directory()
+    assert resolved == custom_dir
+    assert resolved.exists()
+
+

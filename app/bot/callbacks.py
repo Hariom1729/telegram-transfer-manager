@@ -582,7 +582,8 @@ async def _handle_topic_action(query, user_id: int, data: str) -> None:
             )
             topic_display = f"🧵 {topic_name}"
 
-        if udata.get("is_local_download"):
+        is_local = (udata.get("destination_chat_id") == 0) or bool(udata.get("is_local_download"))
+        if is_local:
             session_store.update_data(
                 user_id,
                 destination_chat_id=0,
@@ -590,14 +591,19 @@ async def _handle_topic_action(query, user_id: int, data: str) -> None:
                 destination_thread_id=None,
                 topic_name=None,
             )
-            await _show_content_filter(query, user_id)
-            return
+            action_desc = "download"
+            all_btn_label = "➡️ All Messages (Download to Local)"
+            all_btn_cb = "browse:to_dest"
+        else:
+            action_desc = "transfer"
+            all_btn_label = "➡️ All Messages (Select Destination)"
+            all_btn_cb = "cp:src:to_dest"
 
         text = (
             f"✅ *Source Selected*\n\n"
             f"📢 *{source_title}*\n"
             f"{topic_display}\n\n"
-            "Choose what to transfer:"
+            f"Choose what to {action_desc}:"
         )
         kb = InlineKeyboardMarkup(
             [
@@ -615,8 +621,8 @@ async def _handle_topic_action(query, user_id: int, data: str) -> None:
                 ],
                 [
                     InlineKeyboardButton(
-                        "➡️ All Messages (Select Destination)",
-                        callback_data="cp:src:to_dest",
+                        all_btn_label,
+                        callback_data=all_btn_cb,
                     )
                 ],
                 [
@@ -896,16 +902,20 @@ async def _handle_browse_action(query, user_id: int, data: str) -> None:
         source_title = udata.get("source_chat_title", "Source Chat")
         source_topic = udata.get("source_topic_name")
         topic_display = f"\n🧵 `{source_topic}`" if source_topic else ""
+        is_local = (udata.get("destination_chat_id", 0) == 0) or bool(udata.get("is_local_download"))
+        action_desc = "download" if is_local else "transfer"
+        all_btn_label = "➡️ All Messages (Download to Local)" if is_local else "➡️ All Messages (Select Destination)"
+        all_btn_cb = "browse:to_dest" if is_local else "cp:src:to_dest"
         text = (
             f"✅ *Source Selected*\n\n"
             f"📢 *{source_title}*{topic_display}\n\n"
-            "Choose what to transfer:"
+            f"Choose what to {action_desc}:"
         )
         kb = InlineKeyboardMarkup(
             [
                 [InlineKeyboardButton("📂 Browse Messages", callback_data="browse:open")],
                 [InlineKeyboardButton("🔢 Enter Message ID/Range", callback_data="browse:enter_range")],
-                [InlineKeyboardButton("➡️ All Messages (Select Destination)", callback_data="cp:src:to_dest")],
+                [InlineKeyboardButton(all_btn_label, callback_data=all_btn_cb)],
                 [InlineKeyboardButton("⬅️ Back", callback_data="cp:src:menu"), InlineKeyboardButton("❌ Cancel", callback_data="nav:cancel")],
             ]
         )
@@ -1151,15 +1161,25 @@ async def _handle_preview_action(query, user_id: int, data: str) -> None:
         dest_id = udata.get("destination_chat_id", 0)
         dest_title = udata.get("destination_chat_title")
         dest_thread_id = udata.get("destination_thread_id")
-        topic_name = udata.get("topic_name")
-        c_types = ",".join(udata.get("content_types", ["all"]))
+        raw_c_types = udata.get("content_types", ["all"])
+        if bool(udata.get("browse_video_only")) and "all" in raw_c_types:
+            c_types = "video"
+        else:
+            c_types = ",".join(raw_c_types)
+
         dup_mode = udata.get("duplicate_mode", "skip")
         start_id = udata.get("start_message_id")
         end_id = udata.get("end_message_id")
         r_limit = udata.get("range_limit")
         accessible_count = udata.get("accessible_count")
+        video_count = udata.get("video_count")
 
-        total_msgs = accessible_count if (accessible_count is not None and accessible_count > 0) else (r_limit if r_limit else 0)
+        if "video" in c_types and video_count is not None and video_count > 0:
+            total_msgs = video_count
+        elif accessible_count is not None and accessible_count > 0:
+            total_msgs = accessible_count
+        else:
+            total_msgs = r_limit if r_limit else 0
 
         # Create job
         job = await transfer_manager.create_job(

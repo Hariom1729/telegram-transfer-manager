@@ -24,10 +24,17 @@ def get_download_directory() -> Path:
     """Resolve the operating system's standard user Downloads folder.
 
     Cross-platform behavior:
+    - Custom env: Respects DOWNLOAD_DIRECTORY or DOWNLOAD_DIR if configured
     - macOS: ~/Downloads (e.g. /Users/<username>/Downloads)
     - Windows: Resolves actual shell Downloads folder via registry / USERPROFILE / home
     - Linux: Respects XDG_DOWNLOAD_DIR config or falls back to ~/Downloads
     """
+    custom_dir = os.environ.get("DOWNLOAD_DIRECTORY") or os.environ.get("DOWNLOAD_DIR")
+    if custom_dir and custom_dir.strip():
+        p = Path(custom_dir.strip())
+        p.mkdir(parents=True, exist_ok=True)
+        return p
+
     home = Path.home()
 
     if sys.platform == "win32":

@@ -319,7 +319,13 @@ class MessageBrowser:
             else InlineKeyboardButton("🔍 Search", callback_data="browse:search")
         )
         dest_id = udata.get("destination_chat_id")
-        cont_label = "➡️ Continue to Transfer" if dest_id is not None else "➡️ Select Destination"
+        is_local = (dest_id == 0) or bool(udata.get("is_local_download"))
+        if is_local:
+            cont_label = "➡️ Continue to Download"
+        elif dest_id is not None:
+            cont_label = "➡️ Continue to Transfer"
+        else:
+            cont_label = "➡️ Select Destination"
         buttons.append(
             [
                 search_btn,

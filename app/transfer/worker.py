@@ -312,7 +312,8 @@ class TransferWorker:
                     if start_msg_id and msg.id < start_msg_id:
                         continue
                     if end_msg_id and msg.id > end_msg_id:
-                        continue
+                        logger.info("Reached end of requested range (%s > %s). Ending message iteration.", msg.id, end_msg_id)
+                        break
 
                 # Thread / Topic verification:
                 # If a source topic was specified and not targeting specific IDs, ensure the message belongs to this topic!

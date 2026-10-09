@@ -727,7 +727,6 @@ class ChatPicker:
                     id=0,
                     title="💾 Local Downloads Folder",
                     chat_type="private",
-                    display_icon="💾",
                 )
             else:
                 # Fallback representation
@@ -806,7 +805,8 @@ class ChatPicker:
                 except Exception as e:
                     logger.error("Failed to retrieve source forum topics: %s", e)
 
-            if udata.get("is_local_download"):
+            is_local = (udata.get("destination_chat_id") == 0) or bool(udata.get("is_local_download"))
+            if is_local:
                 session_store.update_data(
                     user_id,
                     source_chat_id=picked.id,
@@ -818,23 +818,26 @@ class ChatPicker:
                     destination_thread_id=None,
                     topic_name=None,
                 )
-                from app.bot.callbacks import _show_content_filter
+                action_desc = "download"
+                all_btn_label = "➡️ All Messages (Download to Local)"
+                all_btn_cb = "browse:to_dest"
+            else:
+                session_store.update_data(
+                    user_id,
+                    source_chat_id=picked.id,
+                    source_chat_title=picked.title,
+                    source_thread_id=None,
+                    source_topic_name=None,
+                )
+                action_desc = "transfer"
+                all_btn_label = "➡️ All Messages (Select Destination)"
+                all_btn_cb = "cp:src:to_dest"
 
-                await _show_content_filter(query, user_id)
-                return
-
-            session_store.update_data(
-                user_id,
-                source_chat_id=picked.id,
-                source_chat_title=picked.title,
-                source_thread_id=None,
-                source_topic_name=None,
-            )
             text = (
                 f"✅ *Source Selected*\n\n"
                 f"{picked.display_icon} *{picked.title}*\n"
                 f"`ID: {picked.id}`\n\n"
-                "Choose what to transfer:"
+                f"Choose what to {action_desc}:"
             )
             kb = InlineKeyboardMarkup(
                 [
@@ -852,8 +855,8 @@ class ChatPicker:
                     ],
                     [
                         InlineKeyboardButton(
-                            "➡️ All Messages (Select Destination)",
-                            callback_data="cp:src:to_dest",
+                            all_btn_label,
+                            callback_data=all_btn_cb,
                         )
                     ],
                     [
