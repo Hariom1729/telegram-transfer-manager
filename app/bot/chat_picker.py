@@ -834,19 +834,31 @@ class ChatPicker:
                 f"✅ *Source Selected*\n\n"
                 f"{picked.display_icon} *{picked.title}*\n"
                 f"`ID: {picked.id}`\n\n"
-                "Next step: Select the transfer destination."
+                "Choose what to transfer:"
             )
             kb = InlineKeyboardMarkup(
                 [
                     [
                         InlineKeyboardButton(
-                            "➡️ Select Destination",
+                            "📂 Browse Messages",
+                            callback_data="browse:open",
+                        )
+                    ],
+                    [
+                        InlineKeyboardButton(
+                            "🔢 Enter Message ID/Range",
+                            callback_data="browse:enter_range",
+                        )
+                    ],
+                    [
+                        InlineKeyboardButton(
+                            "➡️ All Messages (Select Destination)",
                             callback_data="cp:src:to_dest",
                         )
                     ],
                     [
                         InlineKeyboardButton(
-                            "⬅️ Change Source", callback_data="cp:src:menu"
+                            "⬅️ Back", callback_data="cp:src:menu"
                         ),
                         InlineKeyboardButton("❌ Cancel", callback_data="nav:cancel"),
                     ],

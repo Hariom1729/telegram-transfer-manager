@@ -1,6 +1,7 @@
 """Command, Message, and Media Handlers for Bot UI."""
 
 import logging
+import re
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import (
     Application,
@@ -375,11 +376,13 @@ async def text_message_handler(
 
     # 7. Custom Range / Quantity Input
     elif state == BotState.WIZARD_RANGE_INPUT:
-        raw_text = text.strip().lower()
+        raw_text = text.strip()
+        lower_text = raw_text.lower()
+        udata = session_store.get_data(user_id)
 
-        # 1. Check for "first N" or single number "N" (e.g. "first 5", "5")
-        if raw_text.startswith("first ") or (raw_text.isdigit() and int(raw_text) > 0):
-            num_str = raw_text.replace("first", "").strip()
+        # 1. Check for "first N" (e.g. "first 5", "first 10")
+        if lower_text.startswith("first "):
+            num_str = lower_text.replace("first", "").strip()
             if num_str.isdigit() and int(num_str) > 0:
                 count = int(num_str)
                 session_store.update_data(
@@ -389,17 +392,29 @@ async def text_message_handler(
                     range_type=f"first_{count}",
                     range_limit=count,
                 )
-                await message.reply_text(
-                    f"✅ Quantity set: First {count} messages (from beginning)\n\n"
-                    "Configure duplicate handling:",
-                    reply_markup=build_duplicate_mode_keyboard("skip"),
-                    parse_mode="Markdown",
-                )
+                if udata.get("destination_chat_id") is None:
+                    kb = InlineKeyboardMarkup(
+                        [
+                            [InlineKeyboardButton("➡️ Select Destination", callback_data="cp:src:to_dest")],
+                            [InlineKeyboardButton("📂 Browse Messages", callback_data="browse:open")],
+                        ]
+                    )
+                    await message.reply_text(
+                        f"✅ Quantity set: First {count} messages\n\nNext step: Select the transfer destination.",
+                        reply_markup=kb,
+                        parse_mode="Markdown",
+                    )
+                else:
+                    await message.reply_text(
+                        f"✅ Quantity set: First {count} messages (from beginning)\n\nConfigure duplicate handling:",
+                        reply_markup=build_duplicate_mode_keyboard("skip"),
+                        parse_mode="Markdown",
+                    )
                 return
 
         # 2. Check for "last N" (e.g. "last 20")
-        if raw_text.startswith("last "):
-            num_str = raw_text.replace("last", "").strip()
+        if lower_text.startswith("last "):
+            num_str = lower_text.replace("last", "").strip()
             if num_str.isdigit() and int(num_str) > 0:
                 count = int(num_str)
                 session_store.update_data(
@@ -409,18 +424,30 @@ async def text_message_handler(
                     range_type=f"last_{count}",
                     range_limit=count,
                 )
-                await message.reply_text(
-                    f"✅ Quantity set: Last {count} messages (latest)\n\n"
-                    "Configure duplicate handling:",
-                    reply_markup=build_duplicate_mode_keyboard("skip"),
-                    parse_mode="Markdown",
-                )
+                if udata.get("destination_chat_id") is None:
+                    kb = InlineKeyboardMarkup(
+                        [
+                            [InlineKeyboardButton("➡️ Select Destination", callback_data="cp:src:to_dest")],
+                            [InlineKeyboardButton("📂 Browse Messages", callback_data="browse:open")],
+                        ]
+                    )
+                    await message.reply_text(
+                        f"✅ Quantity set: Last {count} messages\n\nNext step: Select the transfer destination.",
+                        reply_markup=kb,
+                        parse_mode="Markdown",
+                    )
+                else:
+                    await message.reply_text(
+                        f"✅ Quantity set: Last {count} messages (latest)\n\nConfigure duplicate handling:",
+                        reply_markup=build_duplicate_mode_keyboard("skip"),
+                        parse_mode="Markdown",
+                    )
                 return
 
-        # 3. Check for specific ID range (e.g. "1 50" or "1-50")
-        parts = text.replace("-", " ").split()
-        if len(parts) >= 2 and parts[0].isdigit() and parts[1].isdigit():
-            start_id, end_id = int(parts[0]), int(parts[1])
+        # 3. Check for specific ID range (e.g. "1240-1250" or "1240 1250")
+        range_parts = [p for p in re.split(r"[\s\-]+", raw_text) if p]
+        if len(range_parts) == 2 and range_parts[0].isdigit() and range_parts[1].isdigit():
+            start_id, end_id = int(range_parts[0]), int(range_parts[1])
             is_valid, err = validate_message_range(start_id, end_id)
             if not is_valid:
                 await message.reply_text(f"❌ {err}\nPlease try again:")
@@ -431,24 +458,92 @@ async def text_message_handler(
                 start_message_id=start_id,
                 end_message_id=end_id,
                 range_type="custom",
-                range_limit=end_id - start_id + 1,
+                range_limit=max(0, end_id - start_id + 1),
             )
+            if udata.get("destination_chat_id") is None:
+                kb = InlineKeyboardMarkup(
+                    [
+                        [InlineKeyboardButton("➡️ Select Destination", callback_data="cp:src:to_dest")],
+                        [InlineKeyboardButton("📂 Browse Messages", callback_data="browse:open")],
+                    ]
+                )
+                await message.reply_text(
+                    f"✅ Range set: Messages {start_id} → {end_id}\n\nNext step: Select the transfer destination.",
+                    reply_markup=kb,
+                    parse_mode="Markdown",
+                )
+            else:
+                await message.reply_text(
+                    f"✅ Range set: Messages {start_id} → {end_id}\n\nConfigure duplicate handling:",
+                    reply_markup=build_duplicate_mode_keyboard("skip"),
+                    parse_mode="Markdown",
+                )
+            return
+
+        # 4. Check for single message ID (e.g. "1245")
+        if raw_text.isdigit() and int(raw_text) > 0:
+            single_id = int(raw_text)
+            is_valid, err = validate_message_range(single_id, single_id)
+            if not is_valid:
+                await message.reply_text(f"❌ {err}\nPlease try again:")
+                return
+
+            session_store.update_data(
+                user_id,
+                start_message_id=single_id,
+                end_message_id=single_id,
+                range_type="single",
+                range_limit=1,
+            )
+            if udata.get("destination_chat_id") is None:
+                kb = InlineKeyboardMarkup(
+                    [
+                        [InlineKeyboardButton("➡️ Select Destination", callback_data="cp:src:to_dest")],
+                        [InlineKeyboardButton("📂 Browse Messages", callback_data="browse:open")],
+                    ]
+                )
+                await message.reply_text(
+                    f"✅ Single message set: Message #{single_id}\n\nNext step: Select the transfer destination.",
+                    reply_markup=kb,
+                    parse_mode="Markdown",
+                )
+            else:
+                await message.reply_text(
+                    f"✅ Single message set: Message #{single_id}\n\nConfigure duplicate handling:",
+                    reply_markup=build_duplicate_mode_keyboard("skip"),
+                    parse_mode="Markdown",
+                )
+            return
+
+        await message.reply_text(
+            "❌ Invalid format.\n\n"
+            "You can enter:\n"
+            "• **Single message ID:** `1245`\n"
+            "• **Specific ID range:** `1240-1250` or `1240 1250`\n"
+            "• **Recent messages:** `first 10` or `last 20`"
+        )
+        return
+
+    # 8. Jump to Message ID in Browser
+    elif state == BotState.WIZARD_BROWSE_JUMP:
+        raw_text = text.strip()
+        if not raw_text.isdigit() or int(raw_text) < 1:
             await message.reply_text(
-                f"✅ Range set: Messages {start_id} → {end_id}\n\n"
-                "Configure duplicate handling:",
-                reply_markup=build_duplicate_mode_keyboard("skip"),
+                "❌ *Invalid Message ID.*\nPlease send a valid numeric Telegram message ID (e.g. `1245`):",
                 parse_mode="Markdown",
             )
             return
-        else:
-            await message.reply_text(
-                "❌ Invalid format.\n\n"
-                "You can enter:\n"
-                "• **First N from start:** `first 5`, `first 10`, `5`\n"
-                "• **Specific ID range:** `1 50` or `1-50`\n"
-                "• **Last N latest:** `last 20`"
-            )
-            return
+        jump_id = int(raw_text)
+        from app.bot.message_browser import MessageBrowser
+        await MessageBrowser.show_browser(message, user_id, jump_id=jump_id)
+        return
+
+    # 9. Search Messages in Browser
+    elif state == BotState.WIZARD_BROWSE_SEARCH:
+        search_query = text.strip()
+        from app.bot.message_browser import MessageBrowser
+        await MessageBrowser.show_browser(message, user_id, search_query=search_query)
+        return
 
     # 8. Clean Range Input (for purging messages by range)
     elif state == BotState.CLEAN_RANGE_INPUT:

@@ -302,6 +302,13 @@ class TransferWorker:
                         await tracker.update()
                     continue
 
+                # Defensive range boundary enforcement
+                if not specific_ids:
+                    if start_msg_id and msg.id < start_msg_id:
+                        continue
+                    if end_msg_id and msg.id > end_msg_id:
+                        continue
+
                 # Thread / Topic verification:
                 # If a source topic was specified and not targeting specific IDs, ensure the message belongs to this topic!
                 if job.source_thread_id and not specific_ids:

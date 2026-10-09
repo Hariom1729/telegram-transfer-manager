@@ -255,6 +255,9 @@ def build_range_keyboard() -> InlineKeyboardMarkup:
     """Build message range selector buttons."""
     keyboard = [
         [
+            InlineKeyboardButton("📂 Browse Messages", callback_data="browse:open"),
+        ],
+        [
             InlineKeyboardButton("All Messages", callback_data="range:pick:all"),
             InlineKeyboardButton("First 5", callback_data="range:pick:first_5"),
             InlineKeyboardButton("First 10", callback_data="range:pick:first_10"),
